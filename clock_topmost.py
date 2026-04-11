@@ -108,14 +108,13 @@ RADAR_UPDATE_INTERVAL_SEC = 5 * 60
 RADAR_DEFAULT_CITY = "Toyota"
 RADAR_DEFAULT_LAT = 35.083
 RADAR_DEFAULT_LON = 137.156
-RADAR_DEFAULT_ZOOM = 6
+RADAR_DEFAULT_ZOOM = 7
 RADAR_STATE_FILE = "clock_radar_state.json"
 RADAR_FOCUS_X_RATIO = 0.46
 RADAR_FOCUS_Y_RATIO = 0.44
 PAGE_SWITCH_INTERVAL_SEC = 9
 SLIDE_STEPS = 22
 SLIDE_INTERVAL_MS = 14
-
 WMO_WEATHER = {
     0: "Clear",
     1: "Mainly clear",
@@ -174,6 +173,100 @@ class MONITORINFO(ctypes.Structure):
         ("rcMonitor", RECT),
         ("rcWork", RECT),
         ("dwFlags", wintypes.DWORD),
+    ]
+
+
+class MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", wintypes.DWORD),
+        ("dwMemoryLoad", wintypes.DWORD),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+class FILETIME(ctypes.Structure):
+    _fields_ = [
+        ("dwLowDateTime", wintypes.DWORD),
+        ("dwHighDateTime", wintypes.DWORD),
+    ]
+
+
+class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("PageFaultCount", wintypes.DWORD),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
+class MIB_IFROW(ctypes.Structure):
+    _fields_ = [
+        ("wszName", wintypes.WCHAR * 256),
+        ("dwIndex", wintypes.DWORD),
+        ("dwType", wintypes.DWORD),
+        ("dwMtu", wintypes.DWORD),
+        ("dwSpeed", wintypes.DWORD),
+        ("dwPhysAddrLen", wintypes.DWORD),
+        ("bPhysAddr", wintypes.BYTE * 8),
+        ("dwAdminStatus", wintypes.DWORD),
+        ("dwOperStatus", wintypes.DWORD),
+        ("dwLastChange", wintypes.DWORD),
+        ("dwInOctets", wintypes.DWORD),
+        ("dwInUcastPkts", wintypes.DWORD),
+        ("dwInNUcastPkts", wintypes.DWORD),
+        ("dwInDiscards", wintypes.DWORD),
+        ("dwInErrors", wintypes.DWORD),
+        ("dwInUnknownProtos", wintypes.DWORD),
+        ("dwOutOctets", wintypes.DWORD),
+        ("dwOutUcastPkts", wintypes.DWORD),
+        ("dwOutNUcastPkts", wintypes.DWORD),
+        ("dwOutDiscards", wintypes.DWORD),
+        ("dwOutErrors", wintypes.DWORD),
+        ("dwOutQLen", wintypes.DWORD),
+        ("dwDescrLen", wintypes.DWORD),
+        ("bDescr", wintypes.BYTE * 256),
+    ]
+
+
+class MIB_IFTABLE(ctypes.Structure):
+    _fields_ = [
+        ("dwNumEntries", wintypes.DWORD),
+        ("table", MIB_IFROW * 1),
+    ]
+
+
+class PDH_FMT_COUNTERVALUE_UNION(ctypes.Union):
+    _fields_ = [
+        ("longValue", ctypes.c_long),
+        ("doubleValue", ctypes.c_double),
+        ("largeValue", ctypes.c_longlong),
+    ]
+
+
+class PDH_FMT_COUNTERVALUE(ctypes.Structure):
+    _fields_ = [
+        ("CStatus", wintypes.DWORD),
+        ("Anonymous", PDH_FMT_COUNTERVALUE_UNION),
+    ]
+
+
+class PDH_FMT_COUNTERVALUE_ITEM_W(ctypes.Structure):
+    _fields_ = [
+        ("szName", wintypes.LPWSTR),
+        ("FmtValue", PDH_FMT_COUNTERVALUE),
     ]
 
 
@@ -342,9 +435,11 @@ class TopmostClockApp:
         self._last_minute_key = ""
         self._last_weather_fetch = datetime.min
         self._last_radar_fetch = datetime.min
+        self._last_perf_fetch = datetime.min
+        self._last_status_fetch = datetime.min
         self._busy_weather = False
         self._busy_radar = False
-        self._page_names = ["clock", "weather"]
+        self._page_names = ["clock", "weather", "status"]
         self._page_index = 0
         self._current_page = "clock"
         self._page_switch_seconds = max(3, int(os.environ.get("CLOCK_PAGE_SECONDS", str(PAGE_SWITCH_INTERVAL_SEC))))
@@ -363,6 +458,12 @@ class TopmostClockApp:
         self._last_radar_message = "Loading radar..."
         self._script_dir = os.path.dirname(os.path.abspath(__file__))
         self._radar_state_path = os.path.join(self._script_dir, RADAR_STATE_FILE)
+        self._app_started_at = datetime.now()
+        self._last_cpu_times = None
+        self._last_wifi_sample = None
+        self._cached_wifi_text = "--"
+        self._last_disk_percent = None
+        self._wifi_bytes_prev = None
 
         self.weather_city = os.environ.get("CLOCK_CITY", "Tokyo")
         self.weather_lat = os.environ.get("CLOCK_LAT", "").strip()
@@ -376,9 +477,9 @@ class TopmostClockApp:
             try:
                 initial_zoom = int(radar_zoom_raw)
             except ValueError:
-                initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+                initial_zoom = RADAR_DEFAULT_ZOOM
         else:
-            initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+            initial_zoom = RADAR_DEFAULT_ZOOM
         self.radar_zoom = max(6, min(7, initial_zoom))
 
         self.root.title("Fixed Topmost Clock")
@@ -404,8 +505,8 @@ class TopmostClockApp:
         self.colon_font = tkfont.Font(family="Consolas", size=90, weight="bold")
         self.small_time_font = tkfont.Font(family="Consolas", size=12, weight="bold")
         self.grip_font = tkfont.Font(family="Consolas", size=12, weight="bold")
-        self.section_title_font = tkfont.Font(family="Consolas", size=11, weight="bold")
-        self.info_font = tkfont.Font(family="Consolas", size=11, weight="normal")
+        self.section_title_font = tkfont.Font(family="Consolas", size=12, weight="bold")
+        self.info_font = tkfont.Font(family="Consolas", size=12, weight="bold")
         self.small_info_font = tkfont.Font(family="Consolas", size=10, weight="normal")
 
         self.outer = tk.Frame(
@@ -697,8 +798,9 @@ class TopmostClockApp:
     def _build_pages(self):
         page_clock = tk.Frame(self.page_host, bg=PANEL_BG)
         page_weather = tk.Frame(self.page_host, bg=PANEL_BG)
+        page_status = tk.Frame(self.page_host, bg=PANEL_BG)
 
-        for page in (page_clock, page_weather):
+        for page in (page_clock, page_weather, page_status):
             page.place(relx=0, rely=0, relwidth=1, relheight=1)
 
         digits_holder = tk.Frame(page_clock, bg=PANEL_BG)
@@ -857,9 +959,128 @@ class TopmostClockApp:
         self.radar_title.pack(fill="x", pady=(6, 0))
         self.radar_status_label.pack(fill="x", pady=(6, 0))
 
+        self.status_card = tk.Frame(
+            page_status,
+            bg=CARD_BG,
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=CARD_BORDER,
+            padx=18,
+            pady=12,
+        )
+        self.status_card.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.94, relheight=0.88)
+
+        self.status_title = tk.Label(
+            self.status_card,
+            text="SYSTEM STATUS",
+            fg=ACCENT_COLOR,
+            bg=CARD_BG,
+            font=self.section_title_font,
+            anchor="w",
+        )
+        self.status_title.pack(fill="x")
+
+        self.status_body = tk.Frame(self.status_card, bg=CARD_BG)
+        self.status_body.pack(fill="both", expand=True, pady=(8, 0))
+
+        self.status_left_col = tk.Frame(self.status_body, bg=CARD_BG)
+        self.status_left_col.pack(side="left", fill="both", expand=True, padx=(0, 12))
+
+        self.status_right_col = tk.Frame(self.status_body, bg=CARD_BG)
+        self.status_right_col.pack(side="left", fill="both", expand=True)
+
+        self.status_cpu_label = tk.Label(
+            self.status_left_col,
+            text="CPU Usage: --",
+            fg=TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_cpu_label.pack(fill="x", pady=(0, 6))
+
+        self.status_disk_label = tk.Label(
+            self.status_left_col,
+            text="Disk Usage: --",
+            fg=MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.small_info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_disk_label.pack(fill="x", pady=(0, 4))
+
+        self.status_memory_label = tk.Label(
+            self.status_left_col,
+            text="Memory Used: --",
+            fg=TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_memory_label.pack(fill="x", pady=(4, 6))
+
+        self.status_free_label = tk.Label(
+            self.status_left_col,
+            text="Free Memory: --",
+            fg=MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.small_info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_free_label.pack(fill="x", pady=(0, 4))
+
+        self.status_runtime_label = tk.Label(
+            self.status_right_col,
+            text="App Runtime: --",
+            fg=TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_runtime_label.pack(fill="x", pady=(0, 6))
+
+        self.status_uptime_label = tk.Label(
+            self.status_right_col,
+            text="System Uptime: --",
+            fg=MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.small_info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_uptime_label.pack(fill="x", pady=(0, 4))
+
+        self.status_wifi_label = tk.Label(
+            self.status_right_col,
+            text="Wi-Fi Speed: --",
+            fg=TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_wifi_label.pack(fill="x", pady=(4, 6))
+
+        self.status_proc_mem_label = tk.Label(
+            self.status_right_col,
+            text="Clock Process Memory: --",
+            fg=MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.small_info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.status_proc_mem_label.pack(fill="x", pady=(0, 4))
+
         self.pages = {
             "clock": page_clock,
             "weather": page_weather,
+            "status": page_status,
         }
 
     def _show_page(self, page_name):
@@ -869,6 +1090,8 @@ class TopmostClockApp:
         self._current_page = page_name
         page.tkraise()
         self._update_secondary_clock_display()
+        if page_name == "status":
+            self._update_status_panel(force=True)
 
     def _rotate_page(self):
         if self._fade_animating or self._slide_animating:
@@ -969,8 +1192,19 @@ class TopmostClockApp:
             self.radar_status_label,
             self.small_time_label,
         ]
+        self._status_fade_widgets = [
+            self.status_title,
+            self.status_cpu_label,
+            self.status_disk_label,
+            self.status_memory_label,
+            self.status_free_label,
+            self.status_runtime_label,
+            self.status_uptime_label,
+            self.status_wifi_label,
+            self.status_proc_mem_label,
+        ]
         self._text_base_colors = {}
-        for widget in self._clock_fade_widgets + self._weather_fade_widgets:
+        for widget in self._clock_fade_widgets + self._weather_fade_widgets + self._status_fade_widgets:
             self._text_base_colors[widget] = widget.cget("fg")
 
     def _hex_to_rgb(self, color):
@@ -1005,6 +1239,17 @@ class TopmostClockApp:
         if page_name is None or page_name == "weather":
             self._weather_fade_ratio = ratio
             for widget in self._weather_fade_widgets:
+                if not widget.winfo_exists():
+                    continue
+                base_fg = self._text_base_colors.get(widget, widget.cget("fg"))
+                bg = widget.cget("bg")
+                try:
+                    widget.config(fg=self._blend_color(base_fg, bg, ratio))
+                except tk.TclError:
+                    pass
+
+        if page_name is None or page_name == "status":
+            for widget in self._status_fade_widgets:
                 if not widget.winfo_exists():
                     continue
                 base_fg = self._text_base_colors.get(widget, widget.cget("fg"))
@@ -1475,6 +1720,8 @@ class TopmostClockApp:
             else:
                 status = f"{city}  updated"
 
+            status = f"{status}  (z{requested_zoom})"
+
             if used_zoom is not None:
                 self._save_persisted_radar_zoom(used_zoom)
 
@@ -1689,6 +1936,202 @@ class TopmostClockApp:
             print(f"[Clock] Error fetching {url}: {e}")
             raise
 
+    def _format_bytes_gb(self, byte_value):
+        if byte_value is None:
+            return "--"
+        return f"{byte_value / (1024 ** 3):.1f} GB"
+
+    def _format_duration(self, seconds):
+        seconds = max(0, int(seconds))
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _read_disk_usage_windows(self):
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            free_bytes = ctypes.c_ulonglong(0)
+            total_bytes = ctypes.c_ulonglong(0)
+            total_free_bytes = ctypes.c_ulonglong(0)
+            root_drive = os.environ.get("SystemDrive", "C:") + "\\"
+            ok = ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                root_drive,
+                ctypes.byref(free_bytes),
+                ctypes.byref(total_bytes),
+                ctypes.byref(total_free_bytes),
+            )
+            if not ok or total_bytes.value <= 0:
+                return None
+            used_bytes = total_bytes.value - total_free_bytes.value
+            used_percent = (used_bytes * 100.0) / total_bytes.value
+            return used_percent, used_bytes, total_bytes.value, total_free_bytes.value
+        except Exception:
+            return None
+
+    def _read_wifi_speed_windows(self):
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            iphlpapi = ctypes.windll.iphlpapi
+            size = wintypes.ULONG(0)
+            result = iphlpapi.GetIfTable(None, ctypes.byref(size), False)
+            if result != 122 or size.value == 0:
+                return None
+
+            buffer = (ctypes.c_byte * size.value)()
+            result = iphlpapi.GetIfTable(buffer, ctypes.byref(size), False)
+            if result != 0:
+                return None
+
+            table = ctypes.cast(buffer, ctypes.POINTER(MIB_IFTABLE)).contents
+            row_count = int(table.dwNumEntries)
+            if row_count <= 0:
+                return None
+
+            row_ptr = ctypes.cast(ctypes.addressof(buffer) + ctypes.sizeof(wintypes.DWORD), ctypes.POINTER(MIB_IFROW))
+            now = datetime.now()
+            for index in range(row_count):
+                row = row_ptr[index]
+                name = row.wszName.lower()
+                if row.dwType != 71 and not any(token in name for token in ("wi-fi", "wifi", "wlan", "wireless", "802.11")):
+                    continue
+
+                current = (int(row.dwInOctets), int(row.dwOutOctets), now)
+                if self._last_wifi_sample is None:
+                    self._last_wifi_sample = current
+                    return None
+
+                prev_rx, prev_tx, prev_time = self._last_wifi_sample
+                self._last_wifi_sample = current
+                delta_sec = max(0.001, (now - prev_time).total_seconds())
+                delta_bytes = max(0.0, (current[0] - prev_rx) + (current[1] - prev_tx))
+                mbps = (delta_bytes * 8.0) / (delta_sec * 1_000_000.0)
+                return max(0.0, mbps)
+            return None
+        except Exception:
+            return None
+
+    def _read_cpu_percent_windows(self):
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            idle = FILETIME()
+            kernel = FILETIME()
+            user = FILETIME()
+            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+
+            def ft_to_int(ft):
+                return (int(ft.dwHighDateTime) << 32) | int(ft.dwLowDateTime)
+
+            idle_now = ft_to_int(idle)
+            kernel_now = ft_to_int(kernel)
+            user_now = ft_to_int(user)
+
+            if self._last_cpu_times is None:
+                self._last_cpu_times = (idle_now, kernel_now, user_now)
+                return None
+
+            idle_prev, kernel_prev, user_prev = self._last_cpu_times
+            self._last_cpu_times = (idle_now, kernel_now, user_now)
+
+            total_delta = (kernel_now - kernel_prev) + (user_now - user_prev)
+            idle_delta = idle_now - idle_prev
+            if total_delta <= 0:
+                return None
+            return max(0.0, min(100.0, (total_delta - idle_delta) * 100.0 / total_delta))
+        except Exception:
+            return None
+
+    def _read_memory_status_windows(self):
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            mem = MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+                return None
+            used = int(mem.ullTotalPhys - mem.ullAvailPhys)
+            return {
+                "total": int(mem.ullTotalPhys),
+                "avail": int(mem.ullAvailPhys),
+                "used": used,
+                "load": int(mem.dwMemoryLoad),
+            }
+        except Exception:
+            return None
+
+    def _read_process_memory_windows(self):
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            process_handle = ctypes.windll.kernel32.GetCurrentProcess()
+            ok = ctypes.windll.psapi.GetProcessMemoryInfo(process_handle, ctypes.byref(counters), counters.cb)
+            if not ok:
+                return None
+            return int(counters.WorkingSetSize)
+        except Exception:
+            return None
+
+    def _update_status_panel(self, force=False):
+        now = datetime.now()
+        if not force and self._current_page != "status":
+            return
+        if not force and (now - self._last_status_fetch).total_seconds() < 4:
+            return
+        self._last_status_fetch = now
+
+        cpu = self._read_cpu_percent_windows()
+        mem = self._read_memory_status_windows()
+        proc_mem = self._read_process_memory_windows()
+        disk = self._read_disk_usage_windows()
+        wifi = self._read_wifi_speed_windows()
+
+        if cpu is None:
+            self.status_cpu_label.config(text="CPU Usage: --")
+        else:
+            self.status_cpu_label.config(text=f"CPU Usage: {cpu:.1f}%")
+
+        if disk is None:
+            self.status_disk_label.config(text="Disk Usage: --")
+        else:
+            used_percent, used_bytes, total_bytes, _free_bytes = disk
+            self.status_disk_label.config(
+                text=f"Disk Usage: {used_percent:.1f}% ({self._format_bytes_gb(used_bytes)} / {self._format_bytes_gb(total_bytes)})"
+            )
+
+        if mem is None:
+            self.status_memory_label.config(text="Memory Used: --")
+            self.status_free_label.config(text="Free Memory: --")
+        else:
+            self.status_memory_label.config(
+                text=f"Memory Used: {self._format_bytes_gb(mem['used'])} / {self._format_bytes_gb(mem['total'])} ({mem['load']}%)"
+            )
+            self.status_free_label.config(text=f"Free Memory: {self._format_bytes_gb(mem['avail'])}")
+
+        if proc_mem is None:
+            self.status_proc_mem_label.config(text="Clock Process Memory: --")
+        else:
+            self.status_proc_mem_label.config(text=f"Clock Process Memory: {self._format_bytes_gb(proc_mem)}")
+
+        if wifi is None:
+            self.status_wifi_label.config(text="Wi-Fi Speed: --")
+        else:
+            self.status_wifi_label.config(text=f"Wi-Fi Speed: {wifi:.2f} Mbps")
+
+        app_runtime = datetime.now() - self._app_started_at
+        self.status_runtime_label.config(text=f"App Runtime: {self._format_duration(app_runtime.total_seconds())}")
+
+        if sys.platform.startswith("win") and hasattr(ctypes.windll.kernel32, "GetTickCount64"):
+            tick_ms = ctypes.windll.kernel32.GetTickCount64()
+            self.status_uptime_label.config(text=f"System Uptime: {self._format_duration(tick_ms / 1000.0)}")
+        else:
+            self.status_uptime_label.config(text="System Uptime: --")
+
     def _tick(self):
         now = datetime.now()
         second_key = now.strftime("%Y%m%d%H%M%S")
@@ -1719,6 +2162,9 @@ class TopmostClockApp:
             self._last_minute_key = minute_key
             self._request_weather_refresh()
             self._request_radar_refresh()
+
+        if self._current_page == "status":
+            self._update_status_panel()
 
         self.root.after(120, self._tick)
 
