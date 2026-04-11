@@ -108,8 +108,10 @@ RADAR_UPDATE_INTERVAL_SEC = 5 * 60
 RADAR_DEFAULT_CITY = "Toyota"
 RADAR_DEFAULT_LAT = 35.083
 RADAR_DEFAULT_LON = 137.156
-RADAR_DEFAULT_ZOOM = 8
+RADAR_DEFAULT_ZOOM = 6
 RADAR_STATE_FILE = "clock_radar_state.json"
+RADAR_FOCUS_X_RATIO = 0.46
+RADAR_FOCUS_Y_RATIO = 0.44
 PAGE_SWITCH_INTERVAL_SEC = 9
 SLIDE_STEPS = 22
 SLIDE_INTERVAL_MS = 14
@@ -376,10 +378,8 @@ class TopmostClockApp:
             except ValueError:
                 initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
         else:
-            base_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
-            # Prefer a slightly closer map area unless zoom is explicitly provided.
-            initial_zoom = min(10, base_zoom + 1)
-        self.radar_zoom = max(4, min(10, initial_zoom))
+            initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+        self.radar_zoom = max(6, min(7, initial_zoom))
 
         self.root.title("Fixed Topmost Clock")
         self.root.geometry(f"{self.base_width}x{self.base_height}")
@@ -1274,10 +1274,14 @@ class TopmostClockApp:
         base_image_b64 = payload.get("base_image_b64", "")
         image_b64 = payload.get("image_b64", "")
         status_text = payload.get("status", "Radar unavailable")
+        focus_px_x = float(payload.get("focus_px_x", 128.0))
+        focus_px_y = float(payload.get("focus_px_y", 128.0))
 
         self.radar_status_label.config(text=status_text)
         canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
         canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
+        draw_x = (canvas_w * RADAR_FOCUS_X_RATIO) - focus_px_x
+        draw_y = (canvas_h * RADAR_FOCUS_Y_RATIO) - focus_px_y
 
         if not base_image_b64 and not image_b64:
             self._draw_radar_placeholder(status_text)
@@ -1289,10 +1293,10 @@ class TopmostClockApp:
             try:
                 self._radar_base_photo = tk.PhotoImage(data=base_image_b64, format="png")
                 self.radar_canvas.create_image(
-                    canvas_w / 2,
-                    canvas_h / 2,
+                    draw_x,
+                    draw_y,
                     image=self._radar_base_photo,
-                    anchor="center",
+                    anchor="nw",
                     tags=("radar_content",),
                 )
             except tk.TclError:
@@ -1302,10 +1306,10 @@ class TopmostClockApp:
             try:
                 self._radar_photo = tk.PhotoImage(data=image_b64, format="png")
                 self.radar_canvas.create_image(
-                    canvas_w / 2,
-                    canvas_h / 2,
+                    draw_x,
+                    draw_y,
                     image=self._radar_photo,
-                    anchor="center",
+                    anchor="nw",
                     tags=("radar_content",),
                 )
             except tk.TclError:
@@ -1354,6 +1358,24 @@ class TopmostClockApp:
         y = max(0, min(n - 1, y))
         return x, y
 
+    def _latlon_to_tile_with_pixel(self, lat, lon, zoom):
+        lat = max(-85.0511, min(85.0511, float(lat)))
+        lon = max(-179.9999, min(179.9999, float(lon)))
+        n = 2 ** int(zoom)
+
+        x_float = (lon + 180.0) / 360.0 * n
+        lat_rad = math.radians(lat)
+        y_float = (1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n
+
+        x = int(x_float)
+        y = int(y_float)
+        x = max(0, min(n - 1, x))
+        y = max(0, min(n - 1, y))
+
+        focus_px_x = max(0.0, min(255.999, (x_float - x) * 256.0))
+        focus_px_y = max(0.0, min(255.999, (y_float - y) * 256.0))
+        return x, y, focus_px_x, focus_px_y
+
     def _http_get_bytes(self, url, headers=None, timeout=8):
         req = urllib.request.Request(url, headers=headers or {})
         with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -1366,14 +1388,14 @@ class TopmostClockApp:
             with open(self._radar_state_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             zoom = int(payload.get("last_good_zoom"))
-            return max(4, min(10, zoom))
+            return max(6, min(7, zoom))
         except Exception:
             return None
 
     def _save_persisted_radar_zoom(self, zoom):
         try:
             payload = {
-                "last_good_zoom": int(max(4, min(10, int(zoom)))),
+                "last_good_zoom": int(max(6, min(7, int(zoom)))),
                 "saved_at": datetime.now().isoformat(timespec="seconds"),
             }
             with open(self._radar_state_path, "w", encoding="utf-8") as f:
@@ -1402,37 +1424,49 @@ class TopmostClockApp:
                 self._ui_queue.put(("radar", {"status": "Radar path unavailable"}))
                 return
 
-            requested_zoom = self.radar_zoom
+            requested_zoom = max(6, min(7, self.radar_zoom))
             radar_encoded = ""
             map_encoded = ""
-            used_zoom = None
+            used_zoom = requested_zoom
             map_headers = {"User-Agent": "clock-topmost/1.0"}
 
-            for zoom in range(requested_zoom, 3, -1):
-                x, y = self._latlon_to_tile(lat, lon, zoom)
-                map_url = f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png"
-                tile_url = f"{host}{path}/256/{zoom}/{x}/{y}/2/1_1.png"
-                try:
-                    map_bytes = self._http_get_bytes(map_url, headers=map_headers, timeout=10)
-                    map_encoded = base64.b64encode(map_bytes).decode("ascii")
-                    used_zoom = zoom
-                except Exception:
-                    map_encoded = ""
-                    continue
+            x, y, focus_px_x, focus_px_y = self._latlon_to_tile_with_pixel(lat, lon, requested_zoom)
+            map_url = f"https://tile.openstreetmap.org/{requested_zoom}/{x}/{y}.png"
+            tile_url = f"{host}{path}/256/{requested_zoom}/{x}/{y}/2/1_1.png"
 
-                try:
-                    image_bytes = self._http_get_bytes(tile_url, timeout=10)
-                    radar_encoded = base64.b64encode(image_bytes).decode("ascii")
-                except Exception:
-                    radar_encoded = ""
-
-                # Map tile is mandatory, radar overlay is optional.
-                if map_encoded:
-                    break
+            try:
+                map_bytes = self._http_get_bytes(map_url, headers=map_headers, timeout=10)
+                map_encoded = base64.b64encode(map_bytes).decode("ascii")
+            except Exception:
+                map_encoded = ""
 
             if not map_encoded:
                 self._ui_queue.put(("radar", {"status": "Radar map tile unavailable"}))
                 return
+
+            try:
+                image_bytes = self._http_get_bytes(tile_url, timeout=10)
+                if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                    radar_encoded = base64.b64encode(image_bytes).decode("ascii")
+                else:
+                    body_preview = image_bytes[:256].decode("utf-8", errors="ignore").lower()
+                    if "zoom level not supported" in body_preview:
+                        radar_encoded = ""
+                    else:
+                        radar_encoded = ""
+            except urllib.error.HTTPError as exc:
+                body_preview = ""
+                try:
+                    body_preview = exc.read(256).decode("utf-8", errors="ignore").lower()
+                except Exception:
+                    body_preview = ""
+                exc_text = str(exc).lower()
+                if "zoom level not supported" in body_preview or "zoom level not supported" in exc_text:
+                    radar_encoded = ""
+                else:
+                    radar_encoded = ""
+            except Exception:
+                radar_encoded = ""
 
             frame_time = latest.get("time")
             if frame_time:
@@ -1441,8 +1475,6 @@ class TopmostClockApp:
             else:
                 status = f"{city}  updated"
 
-            if used_zoom is not None and used_zoom != requested_zoom:
-                status = f"{status}  (zoom {requested_zoom}->{used_zoom})"
             if used_zoom is not None:
                 self._save_persisted_radar_zoom(used_zoom)
 
@@ -1455,6 +1487,8 @@ class TopmostClockApp:
                     {
                         "base_image_b64": map_encoded,
                         "image_b64": radar_encoded,
+                        "focus_px_x": focus_px_x,
+                        "focus_px_y": focus_px_y,
                         "status": status,
                     },
                 )
