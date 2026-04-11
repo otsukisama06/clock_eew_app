@@ -453,8 +453,7 @@ class TopmostClockApp:
         self._text_base_colors = {}
         self._last_weather_code = -1
         self._last_second_key = ""
-        self._radar_photo = None
-        self._radar_base_photo = None
+        self._radar_tile_photos = []
         self._last_radar_message = "Loading radar..."
         self._script_dir = os.path.dirname(os.path.abspath(__file__))
         self._radar_state_path = os.path.join(self._script_dir, RADAR_STATE_FILE)
@@ -916,15 +915,6 @@ class TopmostClockApp:
         )
         self.weather_detail_label.pack(fill="x", pady=(6, 0))
 
-        self.radar_title = tk.Label(
-            self.weather_right,
-            text="RAIN RADAR",
-            fg=ACCENT_COLOR,
-            bg=CARD_BG,
-            font=self.section_title_font,
-            anchor="w",
-        )
-
         self.radar_canvas = tk.Canvas(
             self.weather_right,
             width=280,
@@ -945,19 +935,25 @@ class TopmostClockApp:
             state="hidden",
             tags=("fade_overlay",),
         )
-        self.radar_canvas.bind("<Configure>", self._on_radar_canvas_configure)
-
-        self.radar_status_label = tk.Label(
-            self.weather_right,
-            text="Loading radar...",
-            fg=MUTED_TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.small_info_font,
-            anchor="w",
-            justify="left",
+        self._radar_title_item = self.radar_canvas.create_text(
+            12,
+            12,
+            text="RAIN RADAR",
+            fill=ACCENT_COLOR,
+            font=self.section_title_font,
+            anchor="nw",
+            tags=("radar_overlay_text",),
         )
-        self.radar_title.pack(fill="x", pady=(6, 0))
-        self.radar_status_label.pack(fill="x", pady=(6, 0))
+        self._radar_status_item = self.radar_canvas.create_text(
+            12,
+            0,
+            text="Loading radar...",
+            fill=MUTED_TEXT_COLOR,
+            font=self.small_info_font,
+            anchor="sw",
+            tags=("radar_overlay_text",),
+        )
+        self.radar_canvas.bind("<Configure>", self._on_radar_canvas_configure)
 
         self.status_card = tk.Frame(
             page_status,
@@ -1111,8 +1107,6 @@ class TopmostClockApp:
             self.weather_main_label,
             self.weather_sub_label,
             self.weather_detail_label,
-            self.radar_title,
-            self.radar_status_label,
             self.small_time_label,
         ]
         self._status_fade_widgets = [
@@ -1287,6 +1281,8 @@ class TopmostClockApp:
             canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
             canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
             self.radar_canvas.coords(self._radar_overlay_item, 0, 0, canvas_w, canvas_h)
+            self.radar_canvas.coords(self._radar_title_item, 12, 12)
+            self.radar_canvas.coords(self._radar_status_item, 12, canvas_h - 12)
             self.radar_canvas.tag_raise("fade_overlay")
         except tk.TclError:
             pass
@@ -1439,52 +1435,64 @@ class TopmostClockApp:
         self.root.after(250, self._drain_ui_queue)
 
     def _update_radar_ui(self, payload):
-        base_image_b64 = payload.get("base_image_b64", "")
-        image_b64 = payload.get("image_b64", "")
+        base_tiles = payload.get("base_tiles", [])
+        radar_tiles = payload.get("radar_tiles", [])
         status_text = payload.get("status", "Radar unavailable")
         focus_px_x = float(payload.get("focus_px_x", 128.0))
         focus_px_y = float(payload.get("focus_px_y", 128.0))
 
-        self.radar_status_label.config(text=status_text)
+        self._last_radar_message = status_text
         canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
         canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
-        draw_x = (canvas_w * RADAR_FOCUS_X_RATIO) - focus_px_x
-        draw_y = (canvas_h * RADAR_FOCUS_Y_RATIO) - focus_px_y
 
-        if not base_image_b64 and not image_b64:
+        if not base_tiles and not radar_tiles:
             self._draw_radar_placeholder(status_text)
             return
 
         self.radar_canvas.delete("radar_content")
+        self._radar_tile_photos = []
 
-        if base_image_b64:
+        origin_x = (canvas_w * 0.5) - focus_px_x
+        origin_y = (canvas_h * 0.5) - focus_px_y
+
+        decoded_any = False
+        for tile in base_tiles:
+            image_b64 = tile.get("image_b64", "")
+            if not image_b64:
+                continue
             try:
-                self._radar_base_photo = tk.PhotoImage(data=base_image_b64, format="png")
-                self.radar_canvas.create_image(
-                    draw_x,
-                    draw_y,
-                    image=self._radar_base_photo,
-                    anchor="nw",
-                    tags=("radar_content",),
-                )
+                photo = tk.PhotoImage(data=image_b64, format="png")
             except tk.TclError:
-                self._radar_base_photo = None
+                continue
+            self._radar_tile_photos.append(photo)
+            self.radar_canvas.create_image(
+                origin_x + (int(tile.get("dx", 0)) * 256),
+                origin_y + (int(tile.get("dy", 0)) * 256),
+                image=photo,
+                anchor="nw",
+                tags=("radar_content",),
+            )
+            decoded_any = True
 
-        if image_b64:
+        for tile in radar_tiles:
+            image_b64 = tile.get("image_b64", "")
+            if not image_b64:
+                continue
             try:
-                self._radar_photo = tk.PhotoImage(data=image_b64, format="png")
-                self.radar_canvas.create_image(
-                    draw_x,
-                    draw_y,
-                    image=self._radar_photo,
-                    anchor="nw",
-                    tags=("radar_content",),
-                )
+                photo = tk.PhotoImage(data=image_b64, format="png")
             except tk.TclError:
-                if self._radar_base_photo is None:
-                    self._draw_radar_placeholder("Radar image decode failed")
+                continue
+            self._radar_tile_photos.append(photo)
+            self.radar_canvas.create_image(
+                origin_x + (int(tile.get("dx", 0)) * 256),
+                origin_y + (int(tile.get("dy", 0)) * 256),
+                image=photo,
+                anchor="nw",
+                tags=("radar_content",),
+            )
+            decoded_any = True
 
-        if self._radar_base_photo is None and self._radar_photo is None:
+        if not decoded_any:
             self._draw_radar_placeholder(status_text)
             return
 
@@ -1593,48 +1601,65 @@ class TopmostClockApp:
                 return
 
             requested_zoom = max(6, min(7, self.radar_zoom))
-            radar_encoded = ""
-            map_encoded = ""
+            requested_zoom = max(6, min(7, self.radar_zoom))
+            base_tiles = []
+            radar_tiles = []
             used_zoom = requested_zoom
             map_headers = {"User-Agent": "clock-topmost/1.0"}
 
             x, y, focus_px_x, focus_px_y = self._latlon_to_tile_with_pixel(lat, lon, requested_zoom)
-            map_url = f"https://tile.openstreetmap.org/{requested_zoom}/{x}/{y}.png"
-            tile_url = f"{host}{path}/256/{requested_zoom}/{x}/{y}/2/1_1.png"
+            tile_x_count = 3
+            tile_y_count = 3
+            start_dx = -(tile_x_count // 2)
+            start_dy = -(tile_y_count // 2)
 
-            try:
-                map_bytes = self._http_get_bytes(map_url, headers=map_headers, timeout=10)
-                map_encoded = base64.b64encode(map_bytes).decode("ascii")
-            except Exception:
-                map_encoded = ""
+            for dy in range(start_dy, start_dy + tile_y_count):
+                for dx in range(start_dx, start_dx + tile_x_count):
+                    tile_x = x + dx
+                    tile_y = y + dy
+                    if tile_x < 0 or tile_y < 0:
+                        continue
+                    max_tile = 2 ** requested_zoom
+                    if tile_x >= max_tile or tile_y >= max_tile:
+                        continue
 
-            if not map_encoded:
-                self._ui_queue.put(("radar", {"status": "Radar map tile unavailable"}))
-                return
+                    map_url = f"https://tile.openstreetmap.org/{requested_zoom}/{tile_x}/{tile_y}.png"
+                    tile_url = f"{host}{path}/256/{requested_zoom}/{tile_x}/{tile_y}/2/1_1.png"
 
-            try:
-                image_bytes = self._http_get_bytes(tile_url, timeout=10)
-                if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-                    radar_encoded = base64.b64encode(image_bytes).decode("ascii")
-                else:
-                    body_preview = image_bytes[:256].decode("utf-8", errors="ignore").lower()
-                    if "zoom level not supported" in body_preview:
-                        radar_encoded = ""
-                    else:
-                        radar_encoded = ""
-            except urllib.error.HTTPError as exc:
-                body_preview = ""
-                try:
-                    body_preview = exc.read(256).decode("utf-8", errors="ignore").lower()
-                except Exception:
-                    body_preview = ""
-                exc_text = str(exc).lower()
-                if "zoom level not supported" in body_preview or "zoom level not supported" in exc_text:
-                    radar_encoded = ""
-                else:
-                    radar_encoded = ""
-            except Exception:
-                radar_encoded = ""
+                    try:
+                        map_bytes = self._http_get_bytes(map_url, headers=map_headers, timeout=10)
+                        if map_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                            base_tiles.append(
+                                {
+                                    "dx": dx,
+                                    "dy": dy,
+                                    "image_b64": base64.b64encode(map_bytes).decode("ascii"),
+                                }
+                            )
+                    except Exception:
+                        pass
+
+                    try:
+                        image_bytes = self._http_get_bytes(tile_url, timeout=10)
+                        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                            radar_tiles.append(
+                                {
+                                    "dx": dx,
+                                    "dy": dy,
+                                    "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+                                }
+                            )
+                    except urllib.error.HTTPError as exc:
+                        body_preview = ""
+                        try:
+                            body_preview = exc.read(256).decode("utf-8", errors="ignore").lower()
+                        except Exception:
+                            body_preview = ""
+                        exc_text = str(exc).lower()
+                        if "zoom level not supported" in body_preview or "zoom level not supported" in exc_text:
+                            pass
+                    except Exception:
+                        pass
 
             frame_time = latest.get("time")
             if frame_time:
@@ -1648,15 +1673,19 @@ class TopmostClockApp:
             if used_zoom is not None:
                 self._save_persisted_radar_zoom(used_zoom)
 
-            if not radar_encoded:
+            if not base_tiles:
+                self._ui_queue.put(("radar", {"status": "Radar map tiles unavailable"}))
+                return
+
+            if not radar_tiles:
                 status = f"{status}  (radar overlay unavailable)"
 
             self._ui_queue.put(
                 (
                     "radar",
                     {
-                        "base_image_b64": map_encoded,
-                        "image_b64": radar_encoded,
+                        "base_tiles": base_tiles,
+                        "radar_tiles": radar_tiles,
                         "focus_px_x": focus_px_x,
                         "focus_px_y": focus_px_y,
                         "status": status,
