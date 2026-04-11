@@ -989,93 +989,15 @@ class TopmostClockApp:
         self.status_right_col = tk.Frame(self.status_body, bg=CARD_BG)
         self.status_right_col.pack(side="left", fill="both", expand=True)
 
-        self.status_cpu_label = tk.Label(
-            self.status_left_col,
-            text="CPU Usage: --",
-            fg=TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_cpu_label.pack(fill="x", pady=(0, 6))
+        self.status_cpu_row = self._create_status_metric(self.status_left_col, "CPU Usage", "--", primary=True)
+        self.status_disk_row = self._create_status_metric(self.status_left_col, "Disk Usage", "--")
+        self.status_memory_row = self._create_status_metric(self.status_left_col, "Memory Used", "--", primary=True)
+        self.status_free_row = self._create_status_metric(self.status_left_col, "Free Memory", "--")
 
-        self.status_disk_label = tk.Label(
-            self.status_left_col,
-            text="Disk Usage: --",
-            fg=MUTED_TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.small_info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_disk_label.pack(fill="x", pady=(0, 4))
-
-        self.status_memory_label = tk.Label(
-            self.status_left_col,
-            text="Memory Used: --",
-            fg=TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_memory_label.pack(fill="x", pady=(4, 6))
-
-        self.status_free_label = tk.Label(
-            self.status_left_col,
-            text="Free Memory: --",
-            fg=MUTED_TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.small_info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_free_label.pack(fill="x", pady=(0, 4))
-
-        self.status_runtime_label = tk.Label(
-            self.status_right_col,
-            text="App Runtime: --",
-            fg=TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_runtime_label.pack(fill="x", pady=(0, 6))
-
-        self.status_uptime_label = tk.Label(
-            self.status_right_col,
-            text="System Uptime: --",
-            fg=MUTED_TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.small_info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_uptime_label.pack(fill="x", pady=(0, 4))
-
-        self.status_wifi_label = tk.Label(
-            self.status_right_col,
-            text="Wi-Fi Speed: --",
-            fg=TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_wifi_label.pack(fill="x", pady=(4, 6))
-
-        self.status_proc_mem_label = tk.Label(
-            self.status_right_col,
-            text="Clock Process Memory: --",
-            fg=MUTED_TEXT_COLOR,
-            bg=CARD_BG,
-            font=self.small_info_font,
-            anchor="w",
-            justify="left",
-        )
-        self.status_proc_mem_label.pack(fill="x", pady=(0, 4))
+        self.status_runtime_row = self._create_status_text_row(self.status_right_col, "App Runtime", "--", primary=True)
+        self.status_uptime_row = self._create_status_text_row(self.status_right_col, "System Uptime", "--")
+        self.status_wifi_row = self._create_status_metric(self.status_right_col, "Wi-Fi Speed", "--", primary=True, cap=100.0)
+        self.status_proc_mem_row = self._create_status_text_row(self.status_right_col, "Clock Process Memory", "--")
 
         self.pages = {
             "clock": page_clock,
@@ -1091,6 +1013,7 @@ class TopmostClockApp:
         page.tkraise()
         self._update_secondary_clock_display()
         if page_name == "status":
+            self.root.update_idletasks()
             self._update_status_panel(force=True)
 
     def _rotate_page(self):
@@ -1194,14 +1117,14 @@ class TopmostClockApp:
         ]
         self._status_fade_widgets = [
             self.status_title,
-            self.status_cpu_label,
-            self.status_disk_label,
-            self.status_memory_label,
-            self.status_free_label,
-            self.status_runtime_label,
-            self.status_uptime_label,
-            self.status_wifi_label,
-            self.status_proc_mem_label,
+            self.status_cpu_row["title"], self.status_cpu_row["value"],
+            self.status_disk_row["title"], self.status_disk_row["value"],
+            self.status_memory_row["title"], self.status_memory_row["value"],
+            self.status_free_row["title"], self.status_free_row["value"],
+            self.status_runtime_row["title"], self.status_runtime_row["value"],
+            self.status_uptime_row["title"], self.status_uptime_row["value"],
+            self.status_wifi_row["title"], self.status_wifi_row["value"],
+            self.status_proc_mem_row["title"], self.status_proc_mem_row["value"],
         ]
         self._text_base_colors = {}
         for widget in self._clock_fade_widgets + self._weather_fade_widgets + self._status_fade_widgets:
@@ -1948,6 +1871,101 @@ class TopmostClockApp:
         s = seconds % 60
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def _create_status_metric(self, parent, title, value_text, primary=False, cap=100.0):
+        row = tk.Frame(parent, bg=CARD_BG)
+        row.pack(fill="x", pady=(0, 10))
+
+        title_font = self.info_font if primary else self.small_info_font
+        value_font = self.info_font if primary else self.small_info_font
+
+        title_label = tk.Label(
+            row,
+            text=title,
+            fg=ACCENT_COLOR if primary else MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=title_font,
+            anchor="w",
+        )
+        title_label.pack(fill="x")
+
+        value_label = tk.Label(
+            row,
+            text=value_text,
+            fg=TEXT_COLOR,
+            bg=CARD_BG,
+            font=value_font,
+            anchor="w",
+        )
+        value_label.pack(fill="x", pady=(1, 3))
+
+        bar = tk.Canvas(
+            row,
+            height=10,
+            bg=CARD_BG,
+            highlightthickness=0,
+            bd=0,
+        )
+        bar.pack(fill="x")
+        track = bar.create_rectangle(0, 2, 1, 8, fill="#202020", outline="")
+        fill = bar.create_rectangle(0, 2, 1, 8, fill=ACCENT_COLOR, outline="")
+
+        return {
+            "frame": row,
+            "title": title_label,
+            "value": value_label,
+            "bar": bar,
+            "track": track,
+            "fill": fill,
+            "cap": float(cap),
+        }
+
+    def _create_status_text_row(self, parent, title, value_text, primary=False):
+        row = tk.Frame(parent, bg=CARD_BG)
+        row.pack(fill="x", pady=(0, 10))
+
+        title_label = tk.Label(
+            row,
+            text=title,
+            fg=ACCENT_COLOR if primary else MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.info_font if primary else self.small_info_font,
+            anchor="w",
+        )
+        title_label.pack(fill="x")
+
+        value_label = tk.Label(
+            row,
+            text=value_text,
+            fg=TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.info_font if primary else self.small_info_font,
+            anchor="w",
+        )
+        value_label.pack(fill="x", pady=(1, 0))
+
+        return {
+            "frame": row,
+            "title": title_label,
+            "value": value_label,
+        }
+
+    def _set_metric_row(self, row, value_text, percent_value=None):
+        row["value"].config(text=value_text)
+        width = max(1, row["bar"].winfo_width(), row["bar"].winfo_reqwidth())
+        if percent_value is None:
+            row["bar"].itemconfig(row["fill"], state="hidden")
+            row["bar"].coords(row["track"], 0, 2, width, 8)
+            return
+
+        row["bar"].itemconfig(row["fill"], state="normal")
+        track_w = width
+        fill_w = max(1, int(track_w * max(0.0, min(1.0, percent_value / row["cap"]))))
+        row["bar"].coords(row["track"], 0, 2, track_w, 8)
+        row["bar"].coords(row["fill"], 0, 2, fill_w, 8)
+
+    def _set_text_row(self, row, value_text):
+        row["value"].config(text=value_text)
+
     def _read_disk_usage_windows(self):
         if not sys.platform.startswith("win"):
             return None
@@ -2092,45 +2110,49 @@ class TopmostClockApp:
         wifi = self._read_wifi_speed_windows()
 
         if cpu is None:
-            self.status_cpu_label.config(text="CPU Usage: --")
+            self._set_metric_row(self.status_cpu_row, "--", None)
         else:
-            self.status_cpu_label.config(text=f"CPU Usage: {cpu:.1f}%")
+            self._set_metric_row(self.status_cpu_row, f"{cpu:.1f}%", cpu)
 
         if disk is None:
-            self.status_disk_label.config(text="Disk Usage: --")
+            self._set_metric_row(self.status_disk_row, "--", None)
         else:
             used_percent, used_bytes, total_bytes, _free_bytes = disk
-            self.status_disk_label.config(
-                text=f"Disk Usage: {used_percent:.1f}% ({self._format_bytes_gb(used_bytes)} / {self._format_bytes_gb(total_bytes)})"
+            self._set_metric_row(
+                self.status_disk_row,
+                f"{used_percent:.1f}% ({self._format_bytes_gb(used_bytes)} / {self._format_bytes_gb(total_bytes)})",
+                used_percent,
             )
 
         if mem is None:
-            self.status_memory_label.config(text="Memory Used: --")
-            self.status_free_label.config(text="Free Memory: --")
+            self._set_metric_row(self.status_memory_row, "--", None)
+            self._set_text_row(self.status_free_row, "--")
         else:
-            self.status_memory_label.config(
-                text=f"Memory Used: {self._format_bytes_gb(mem['used'])} / {self._format_bytes_gb(mem['total'])} ({mem['load']}%)"
+            self._set_metric_row(
+                self.status_memory_row,
+                f"{self._format_bytes_gb(mem['used'])} / {self._format_bytes_gb(mem['total'])} ({mem['load']}%)",
+                mem['load'],
             )
-            self.status_free_label.config(text=f"Free Memory: {self._format_bytes_gb(mem['avail'])}")
+            self._set_text_row(self.status_free_row, f"{self._format_bytes_gb(mem['avail'])} free")
 
         if proc_mem is None:
-            self.status_proc_mem_label.config(text="Clock Process Memory: --")
+            self._set_text_row(self.status_proc_mem_row, "--")
         else:
-            self.status_proc_mem_label.config(text=f"Clock Process Memory: {self._format_bytes_gb(proc_mem)}")
+            self._set_text_row(self.status_proc_mem_row, f"{self._format_bytes_gb(proc_mem)}")
 
         if wifi is None:
-            self.status_wifi_label.config(text="Wi-Fi Speed: --")
+            self._set_metric_row(self.status_wifi_row, "--", None)
         else:
-            self.status_wifi_label.config(text=f"Wi-Fi Speed: {wifi:.2f} Mbps")
+            self._set_metric_row(self.status_wifi_row, f"{wifi:.2f} Mbps", wifi)
 
         app_runtime = datetime.now() - self._app_started_at
-        self.status_runtime_label.config(text=f"App Runtime: {self._format_duration(app_runtime.total_seconds())}")
+        self._set_text_row(self.status_runtime_row, self._format_duration(app_runtime.total_seconds()))
 
         if sys.platform.startswith("win") and hasattr(ctypes.windll.kernel32, "GetTickCount64"):
             tick_ms = ctypes.windll.kernel32.GetTickCount64()
-            self.status_uptime_label.config(text=f"System Uptime: {self._format_duration(tick_ms / 1000.0)}")
+            self._set_text_row(self.status_uptime_row, self._format_duration(tick_ms / 1000.0))
         else:
-            self.status_uptime_label.config(text="System Uptime: --")
+            self._set_text_row(self.status_uptime_row, "--")
 
     def _tick(self):
         now = datetime.now()
