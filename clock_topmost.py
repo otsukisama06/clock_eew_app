@@ -111,8 +111,8 @@ RADAR_DEFAULT_LON = 137.156
 RADAR_DEFAULT_ZOOM = 8
 RADAR_STATE_FILE = "clock_radar_state.json"
 PAGE_SWITCH_INTERVAL_SEC = 9
-FADE_STEPS = 24
-FADE_INTERVAL_MS = 30
+SLIDE_STEPS = 22
+SLIDE_INTERVAL_MS = 14
 
 WMO_WEATHER = {
     0: "Clear",
@@ -347,8 +347,11 @@ class TopmostClockApp:
         self._current_page = "clock"
         self._page_switch_seconds = max(3, int(os.environ.get("CLOCK_PAGE_SECONDS", str(PAGE_SWITCH_INTERVAL_SEC))))
         self._fade_animating = False
+        self._slide_animating = False
         self._clock_fade_ratio = 0.0
         self._weather_fade_ratio = 0.0
+        self._last_weather_fade_level = -1
+        self._last_radar_overlay_level = -1
         self._text_fade_widgets = []
         self._text_base_colors = {}
         self._last_weather_code = -1
@@ -829,6 +832,17 @@ class TopmostClockApp:
             bd=0,
         )
         self.radar_canvas.pack(fill="both", expand=True, pady=(8, 0))
+        self._radar_overlay_item = self.radar_canvas.create_rectangle(
+            0,
+            0,
+            1,
+            1,
+            fill=PANEL_BG,
+            outline="",
+            state="hidden",
+            tags=("fade_overlay",),
+        )
+        self.radar_canvas.bind("<Configure>", self._on_radar_canvas_configure)
 
         self.radar_status_label = tk.Label(
             self.weather_right,
@@ -855,7 +869,7 @@ class TopmostClockApp:
         self._update_secondary_clock_display()
 
     def _rotate_page(self):
-        if self._fade_animating:
+        if self._fade_animating or self._slide_animating:
             self.root.after(120, self._rotate_page)
             return
         self._page_index = (self._page_index + 1) % len(self._page_names)
@@ -863,42 +877,69 @@ class TopmostClockApp:
         self._fade_to_page(target_page)
 
     def _fade_to_page(self, page_name):
+        # Lightweight slide-in transition.
         self._fade_animating = True
-        from_page = self._current_page
-        to_page = page_name
 
-        total_steps = FADE_STEPS * 2
+        if page_name == self._current_page:
+            self._fade_animating = False
+            self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
+            return
 
-        def _ease_in_out_cubic(t):
+        self._run_slide_in(page_name, self._finish_page_transition)
+
+    def _finish_page_transition(self):
+        self._apply_text_fade(0.0, page_name="clock")
+        self._apply_text_fade(0.0, page_name="weather")
+        self._apply_page_fade("weather", 0.0)
+        self._fade_animating = False
+        self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
+
+    def _run_slide_in(self, page_name, on_done=None):
+        if self._slide_animating:
+            if on_done:
+                on_done()
+            return
+
+        from_page_name = self._current_page
+        from_page = self.pages.get(from_page_name)
+        to_page = self.pages.get(page_name)
+        if to_page is None:
+            if on_done:
+                on_done()
+            return
+
+        self._slide_animating = True
+        self.page_host.update_idletasks()
+        host_w = max(1, self.page_host.winfo_width())
+
+        to_page.place_configure(x=host_w)
+        to_page.tkraise()
+
+        def ease_out_cubic(t):
             t = max(0.0, min(1.0, float(t)))
-            if t < 0.5:
-                return 4.0 * t * t * t
-            return 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0
+            return 1.0 - (1.0 - t) ** 3
 
         def animate(step=0):
-            if step > total_steps:
-                self._show_page(to_page)
-                self._apply_text_fade(0.0, page_name=to_page)
-                self._apply_page_fade(to_page, 0.0)
-                self._fade_animating = False
-                self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
+            if step > SLIDE_STEPS:
+                to_page.place_configure(x=0)
+                if from_page is not None:
+                    from_page.place_configure(x=0)
+                self._current_page = page_name
+                self._update_secondary_clock_display()
+                self._slide_animating = False
+                if on_done:
+                    on_done()
                 return
 
-            if step <= FADE_STEPS:
-                p = _ease_in_out_cubic(step / FADE_STEPS)
-                self._apply_text_fade(p, page_name=from_page)
-                self._apply_page_fade(from_page, p)
-            else:
-                if self._current_page != to_page:
-                    self._show_page(to_page)
-                    self._apply_text_fade(1.0, page_name=to_page)
-                    self._apply_page_fade(to_page, 1.0)
-                p = _ease_in_out_cubic((step - FADE_STEPS) / FADE_STEPS)
-                ratio = 1.0 - p
-                self._apply_text_fade(ratio, page_name=to_page)
-                self._apply_page_fade(to_page, ratio)
+            p = ease_out_cubic(step / SLIDE_STEPS)
+            x_to = int(host_w * (1.0 - p))
+            to_page.place_configure(x=x_to)
 
-            self.root.after(FADE_INTERVAL_MS, lambda: animate(step + 1))
+            if from_page is not None:
+                x_from = int(-host_w * 0.06 * p)
+                from_page.place_configure(x=x_from)
+
+            self.root.after(SLIDE_INTERVAL_MS, lambda: animate(step + 1))
 
         animate(0)
 
@@ -944,7 +985,7 @@ class TopmostClockApp:
 
     def _apply_text_fade(self, ratio, page_name=None):
         ratio = max(0.0, min(1.0, float(ratio)))
-        
+
         if page_name is None or page_name == "clock":
             self._clock_fade_ratio = ratio
             for widget in self._clock_fade_widgets:
@@ -958,7 +999,7 @@ class TopmostClockApp:
                     pass
 
             self._apply_clock_digit_fade(ratio)
-        
+
         if page_name is None or page_name == "weather":
             self._weather_fade_ratio = ratio
             for widget in self._weather_fade_widgets:
@@ -985,80 +1026,98 @@ class TopmostClockApp:
         if page_name != "weather":
             return
 
-        bg_color = self._blend_color(CARD_BG, PANEL_BG, ratio)
-        border_color = self._blend_color(CARD_BORDER, PANEL_BG, ratio)
-        icon_bg = bg_color
+        fade_level = int(ratio * 16 + 0.5)
+        if fade_level != self._last_weather_fade_level:
+            self._last_weather_fade_level = fade_level
+            ratio_for_page = fade_level / 16.0
 
-        for widget in (
-            self.weather_card,
-            self.weather_body,
-            self.weather_left,
-            self.weather_right,
-            self.weather_visual_row,
-            self.weather_text_col,
-        ):
+            bg_color = self._blend_color(CARD_BG, PANEL_BG, ratio_for_page)
+            border_color = self._blend_color(CARD_BORDER, PANEL_BG, ratio_for_page)
+            icon_bg = bg_color
+
+            for widget in (
+                self.weather_card,
+                self.weather_body,
+                self.weather_left,
+                self.weather_right,
+                self.weather_visual_row,
+                self.weather_text_col,
+            ):
+                try:
+                    widget.config(bg=bg_color)
+                except tk.TclError:
+                    pass
+
             try:
-                widget.config(bg=bg_color)
+                self.weather_card.config(highlightbackground=border_color)
             except tk.TclError:
                 pass
 
-        try:
-            self.weather_card.config(highlightbackground=border_color)
-        except tk.TclError:
-            pass
+            try:
+                self.weather_icon_canvas.config(bg=icon_bg)
+            except tk.TclError:
+                pass
 
-        try:
-            self.weather_icon_canvas.config(bg=icon_bg)
-        except tk.TclError:
-            pass
+            try:
+                self.radar_canvas.config(bg=self._blend_color("#0d0d0d", PANEL_BG, ratio_for_page), highlightbackground=border_color)
+            except tk.TclError:
+                pass
 
-        try:
-            self.radar_canvas.config(bg=self._blend_color("#0d0d0d", PANEL_BG, ratio), highlightbackground=border_color)
-        except tk.TclError:
-            pass
+            self._draw_weather_icon(self._last_weather_code, fade_ratio=ratio_for_page)
 
-        self._draw_weather_icon(self._last_weather_code, fade_ratio=ratio)
         self._apply_radar_fade_overlay(ratio)
 
     def _apply_radar_fade_overlay(self, ratio):
         ratio = max(0.0, min(1.0, float(ratio)))
         try:
-            self.radar_canvas.delete("fade_overlay")
-            if ratio <= 0.001:
-                return
             canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
             canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
-            if ratio >= 0.995:
-                self.radar_canvas.create_rectangle(
-                    0,
-                    0,
-                    canvas_w,
-                    canvas_h,
-                    fill=PANEL_BG,
-                    outline="",
-                    tags="fade_overlay",
-                )
+            self.radar_canvas.coords(self._radar_overlay_item, 0, 0, canvas_w, canvas_h)
+
+            overlay_level = int(ratio * 8 + 0.5)
+            if overlay_level == self._last_radar_overlay_level:
+                return
+            self._last_radar_overlay_level = overlay_level
+
+            if overlay_level <= 0:
+                self.radar_canvas.itemconfig(self._radar_overlay_item, state="hidden")
                 return
 
-            if ratio >= 0.75:
+            if overlay_level >= 8:
+                self.radar_canvas.itemconfig(
+                    self._radar_overlay_item,
+                    fill=PANEL_BG,
+                    stipple="",
+                    state="normal",
+                )
+                self.radar_canvas.tag_raise("fade_overlay")
+                return
+
+            if overlay_level >= 6:
                 stipple = "gray75"
-            elif ratio >= 0.5:
+            elif overlay_level >= 4:
                 stipple = "gray50"
-            elif ratio >= 0.25:
+            elif overlay_level >= 2:
                 stipple = "gray25"
             else:
                 stipple = "gray12"
 
-            self.radar_canvas.create_rectangle(
-                0,
-                0,
-                canvas_w,
-                canvas_h,
+            self.radar_canvas.itemconfig(
+                self._radar_overlay_item,
                 fill=PANEL_BG,
-                outline="",
                 stipple=stipple,
-                tags="fade_overlay",
+                state="normal",
             )
+            self.radar_canvas.tag_raise("fade_overlay")
+        except tk.TclError:
+            pass
+
+    def _on_radar_canvas_configure(self, _event=None):
+        try:
+            canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
+            canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
+            self.radar_canvas.coords(self._radar_overlay_item, 0, 0, canvas_w, canvas_h)
+            self.radar_canvas.tag_raise("fade_overlay")
         except tk.TclError:
             pass
 
@@ -1222,7 +1281,7 @@ class TopmostClockApp:
             self._draw_radar_placeholder(status_text)
             return
 
-        self.radar_canvas.delete("all")
+        self.radar_canvas.delete("radar_content")
 
         if base_image_b64:
             try:
@@ -1232,6 +1291,7 @@ class TopmostClockApp:
                     canvas_h / 2,
                     image=self._radar_base_photo,
                     anchor="center",
+                    tags=("radar_content",),
                 )
             except tk.TclError:
                 self._radar_base_photo = None
@@ -1244,6 +1304,7 @@ class TopmostClockApp:
                     canvas_h / 2,
                     image=self._radar_photo,
                     anchor="center",
+                    tags=("radar_content",),
                 )
             except tk.TclError:
                 if self._radar_base_photo is None:
@@ -1256,7 +1317,7 @@ class TopmostClockApp:
         self._apply_radar_fade_overlay(self._weather_fade_ratio)
 
     def _draw_radar_placeholder(self, text):
-        self.radar_canvas.delete("all")
+        self.radar_canvas.delete("radar_content")
         canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
         canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
         self.radar_canvas.create_text(
@@ -1267,6 +1328,7 @@ class TopmostClockApp:
             font=("Consolas", 10, "bold"),
             justify="center",
             width=max(120, canvas_w - 16),
+            tags=("radar_content",),
         )
         self._apply_radar_fade_overlay(self._weather_fade_ratio)
 
