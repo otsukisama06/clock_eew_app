@@ -988,12 +988,10 @@ class TopmostClockApp:
         self.status_cpu_row = self._create_status_metric(self.status_left_col, "CPU Usage", "--", primary=True)
         self.status_disk_row = self._create_status_metric(self.status_left_col, "Disk Usage", "--")
         self.status_memory_row = self._create_status_metric(self.status_left_col, "Memory Used", "--", primary=True)
-        self.status_free_row = self._create_status_metric(self.status_left_col, "Free Memory", "--")
 
         self.status_runtime_row = self._create_status_text_row(self.status_right_col, "App Runtime", "--", primary=True)
         self.status_uptime_row = self._create_status_text_row(self.status_right_col, "System Uptime", "--")
         self.status_wifi_row = self._create_status_metric(self.status_right_col, "Wi-Fi Speed", "--", primary=True, cap=100.0)
-        self.status_proc_mem_row = self._create_status_text_row(self.status_right_col, "Clock Process Memory", "--")
 
         self.pages = {
             "clock": page_clock,
@@ -1114,11 +1112,9 @@ class TopmostClockApp:
             self.status_cpu_row["title"], self.status_cpu_row["value"],
             self.status_disk_row["title"], self.status_disk_row["value"],
             self.status_memory_row["title"], self.status_memory_row["value"],
-            self.status_free_row["title"], self.status_free_row["value"],
             self.status_runtime_row["title"], self.status_runtime_row["value"],
             self.status_uptime_row["title"], self.status_uptime_row["value"],
             self.status_wifi_row["title"], self.status_wifi_row["value"],
-            self.status_proc_mem_row["title"], self.status_proc_mem_row["value"],
         ]
         self._text_base_colors = {}
         for widget in self._clock_fade_widgets + self._weather_fade_widgets + self._status_fade_widgets:
@@ -2128,13 +2124,12 @@ class TopmostClockApp:
         now = datetime.now()
         if not force and self._current_page != "status":
             return
-        if not force and (now - self._last_status_fetch).total_seconds() < 4:
+        if not force and (now - self._last_status_fetch).total_seconds() < 1:
             return
         self._last_status_fetch = now
 
         cpu = self._read_cpu_percent_windows()
         mem = self._read_memory_status_windows()
-        proc_mem = self._read_process_memory_windows()
         disk = self._read_disk_usage_windows()
         wifi = self._read_wifi_speed_windows()
 
@@ -2155,19 +2150,12 @@ class TopmostClockApp:
 
         if mem is None:
             self._set_metric_row(self.status_memory_row, "--", None)
-            self._set_text_row(self.status_free_row, "--")
         else:
             self._set_metric_row(
                 self.status_memory_row,
                 f"{self._format_bytes_gb(mem['used'])} / {self._format_bytes_gb(mem['total'])} ({mem['load']}%)",
                 mem['load'],
             )
-            self._set_text_row(self.status_free_row, f"{self._format_bytes_gb(mem['avail'])} free")
-
-        if proc_mem is None:
-            self._set_text_row(self.status_proc_mem_row, "--")
-        else:
-            self._set_text_row(self.status_proc_mem_row, f"{self._format_bytes_gb(proc_mem)}")
 
         if wifi is None:
             self._set_metric_row(self.status_wifi_row, "--", None)
