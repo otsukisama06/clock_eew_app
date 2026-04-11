@@ -376,7 +376,9 @@ class TopmostClockApp:
             except ValueError:
                 initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
         else:
-            initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+            base_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+            # Prefer a slightly closer map area unless zoom is explicitly provided.
+            initial_zoom = min(10, base_zoom + 1)
         self.radar_zoom = max(4, min(10, initial_zoom))
 
         self.root.title("Fixed Topmost Clock")
@@ -820,18 +822,17 @@ class TopmostClockApp:
             font=self.section_title_font,
             anchor="w",
         )
-        self.radar_title.pack(fill="x")
 
         self.radar_canvas = tk.Canvas(
             self.weather_right,
-            width=260,
-            height=180,
+            width=280,
+            height=210,
             bg="#0d0d0d",
             highlightthickness=1,
             highlightbackground=CARD_BORDER,
             bd=0,
         )
-        self.radar_canvas.pack(fill="both", expand=True, pady=(8, 0))
+        self.radar_canvas.pack(fill="both", expand=True, pady=(0, 0))
         self._radar_overlay_item = self.radar_canvas.create_rectangle(
             0,
             0,
@@ -853,6 +854,7 @@ class TopmostClockApp:
             anchor="w",
             justify="left",
         )
+        self.radar_title.pack(fill="x", pady=(6, 0))
         self.radar_status_label.pack(fill="x", pady=(6, 0))
 
         self.pages = {
