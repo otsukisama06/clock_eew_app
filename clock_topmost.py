@@ -5,6 +5,8 @@ from ctypes import wintypes
 import sys
 import os
 import json
+import math
+import base64
 import queue
 import subprocess
 import threading
@@ -102,9 +104,15 @@ ACCENT_COLOR = "#5fd7ff"
 CARD_BG = "#121212"
 CARD_BORDER = "#242424"
 WEATHER_UPDATE_INTERVAL_SEC = 10 * 60
+RADAR_UPDATE_INTERVAL_SEC = 5 * 60
+RADAR_DEFAULT_CITY = "Toyota"
+RADAR_DEFAULT_LAT = 35.083
+RADAR_DEFAULT_LON = 137.156
+RADAR_DEFAULT_ZOOM = 8
+RADAR_STATE_FILE = "clock_radar_state.json"
 PAGE_SWITCH_INTERVAL_SEC = 9
-FADE_STEPS = 18
-FADE_INTERVAL_MS = 45
+FADE_STEPS = 24
+FADE_INTERVAL_MS = 30
 
 WMO_WEATHER = {
     0: "Clear",
@@ -331,7 +339,9 @@ class TopmostClockApp:
         self._ui_queue = queue.Queue()
         self._last_minute_key = ""
         self._last_weather_fetch = datetime.min
+        self._last_radar_fetch = datetime.min
         self._busy_weather = False
+        self._busy_radar = False
         self._page_names = ["clock", "weather"]
         self._page_index = 0
         self._current_page = "clock"
@@ -343,10 +353,28 @@ class TopmostClockApp:
         self._text_base_colors = {}
         self._last_weather_code = -1
         self._last_second_key = ""
+        self._radar_photo = None
+        self._radar_base_photo = None
+        self._last_radar_message = "Loading radar..."
+        self._script_dir = os.path.dirname(os.path.abspath(__file__))
+        self._radar_state_path = os.path.join(self._script_dir, RADAR_STATE_FILE)
 
         self.weather_city = os.environ.get("CLOCK_CITY", "Tokyo")
         self.weather_lat = os.environ.get("CLOCK_LAT", "").strip()
         self.weather_lon = os.environ.get("CLOCK_LON", "").strip()
+        self.radar_city = os.environ.get("CLOCK_RADAR_CITY", RADAR_DEFAULT_CITY).strip() or RADAR_DEFAULT_CITY
+        self.radar_lat = os.environ.get("CLOCK_RADAR_LAT", "").strip()
+        self.radar_lon = os.environ.get("CLOCK_RADAR_LON", "").strip()
+        persisted_zoom = self._load_persisted_radar_zoom()
+        radar_zoom_raw = os.environ.get("CLOCK_RADAR_ZOOM", "").strip()
+        if radar_zoom_raw:
+            try:
+                initial_zoom = int(radar_zoom_raw)
+            except ValueError:
+                initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+        else:
+            initial_zoom = persisted_zoom if persisted_zoom is not None else RADAR_DEFAULT_ZOOM
+        self.radar_zoom = max(4, min(10, initial_zoom))
 
         self.root.title("Fixed Topmost Clock")
         self.root.geometry(f"{self.base_width}x{self.base_height}")
@@ -539,6 +567,7 @@ class TopmostClockApp:
         self.root.after(200, self._drain_ui_queue)
         self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
         self._request_weather_refresh(force=True)
+        self._request_radar_refresh(force=True)
 
         self._tick()
 
@@ -550,6 +579,13 @@ class TopmostClockApp:
         self._set_topmost(True)
         self._set_click_through(False)
         self._snap_top_right()
+
+    def _apply_window_alpha(self):
+        self.root.attributes("-alpha", self._alpha_value)
+        if self._click_through and sys.platform.startswith("win"):
+            hwnd = self.root.winfo_id()
+            alpha_byte = max(1, min(255, int(self._alpha_value * 255)))
+            ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, alpha_byte, LWA_ALPHA)
 
     def _set_topmost(self, enabled):
         self._topmost_enabled = bool(enabled)
@@ -704,8 +740,17 @@ class TopmostClockApp:
         )
         self.weather_title.pack(fill="x")
 
-        self.weather_visual_row = tk.Frame(self.weather_card, bg=CARD_BG)
-        self.weather_visual_row.pack(fill="x", pady=(8, 0))
+        self.weather_body = tk.Frame(self.weather_card, bg=CARD_BG)
+        self.weather_body.pack(fill="both", expand=True, pady=(8, 0))
+
+        self.weather_left = tk.Frame(self.weather_body, bg=CARD_BG)
+        self.weather_left.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        self.weather_right = tk.Frame(self.weather_body, bg=CARD_BG)
+        self.weather_right.pack(side="left", fill="both", expand=True)
+
+        self.weather_visual_row = tk.Frame(self.weather_left, bg=CARD_BG)
+        self.weather_visual_row.pack(fill="x", pady=(0, 0))
 
         self.weather_icon_canvas = tk.Canvas(
             self.weather_visual_row,
@@ -732,7 +777,7 @@ class TopmostClockApp:
         self.weather_condition_label.pack(fill="x")
 
         self.weather_main_label = tk.Label(
-            self.weather_card,
+            self.weather_left,
             text="Loading weather...",
             fg=TEXT_COLOR,
             bg=CARD_BG,
@@ -743,7 +788,7 @@ class TopmostClockApp:
         self.weather_main_label.pack(fill="x", pady=(8, 0))
 
         self.weather_sub_label = tk.Label(
-            self.weather_card,
+            self.weather_left,
             text="",
             fg=MUTED_TEXT_COLOR,
             bg=CARD_BG,
@@ -754,7 +799,7 @@ class TopmostClockApp:
         self.weather_sub_label.pack(fill="x", pady=(8, 0))
 
         self.weather_detail_label = tk.Label(
-            self.weather_card,
+            self.weather_left,
             text="",
             fg=MUTED_TEXT_COLOR,
             bg=CARD_BG,
@@ -763,6 +808,38 @@ class TopmostClockApp:
             justify="left",
         )
         self.weather_detail_label.pack(fill="x", pady=(6, 0))
+
+        self.radar_title = tk.Label(
+            self.weather_right,
+            text="RAIN RADAR",
+            fg=ACCENT_COLOR,
+            bg=CARD_BG,
+            font=self.section_title_font,
+            anchor="w",
+        )
+        self.radar_title.pack(fill="x")
+
+        self.radar_canvas = tk.Canvas(
+            self.weather_right,
+            width=260,
+            height=180,
+            bg="#0d0d0d",
+            highlightthickness=1,
+            highlightbackground=CARD_BORDER,
+            bd=0,
+        )
+        self.radar_canvas.pack(fill="both", expand=True, pady=(8, 0))
+
+        self.radar_status_label = tk.Label(
+            self.weather_right,
+            text="Loading radar...",
+            fg=MUTED_TEXT_COLOR,
+            bg=CARD_BG,
+            font=self.small_info_font,
+            anchor="w",
+            justify="left",
+        )
+        self.radar_status_label.pack(fill="x", pady=(6, 0))
 
         self.pages = {
             "clock": page_clock,
@@ -790,29 +867,40 @@ class TopmostClockApp:
         from_page = self._current_page
         to_page = page_name
 
-        def fade_out(step=0):
-            if step > FADE_STEPS:
-                self._show_page(page_name)
-                fade_in(0)
-                return
-            ratio = step / FADE_STEPS
-            self._apply_text_fade(ratio, page_name=from_page)
-            self._apply_page_fade(from_page, ratio)
-            self.root.after(FADE_INTERVAL_MS, lambda: fade_out(step + 1))
+        total_steps = FADE_STEPS * 2
 
-        def fade_in(step=0):
-            if step > FADE_STEPS:
+        def _ease_in_out_cubic(t):
+            t = max(0.0, min(1.0, float(t)))
+            if t < 0.5:
+                return 4.0 * t * t * t
+            return 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0
+
+        def animate(step=0):
+            if step > total_steps:
+                self._show_page(to_page)
                 self._apply_text_fade(0.0, page_name=to_page)
                 self._apply_page_fade(to_page, 0.0)
                 self._fade_animating = False
                 self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
                 return
-            ratio = step / FADE_STEPS
-            self._apply_text_fade(1.0 - ratio, page_name=to_page)
-            self._apply_page_fade(to_page, 1.0 - ratio)
-            self.root.after(FADE_INTERVAL_MS, lambda: fade_in(step + 1))
 
-        fade_out(0)
+            if step <= FADE_STEPS:
+                p = _ease_in_out_cubic(step / FADE_STEPS)
+                self._apply_text_fade(p, page_name=from_page)
+                self._apply_page_fade(from_page, p)
+            else:
+                if self._current_page != to_page:
+                    self._show_page(to_page)
+                    self._apply_text_fade(1.0, page_name=to_page)
+                    self._apply_page_fade(to_page, 1.0)
+                p = _ease_in_out_cubic((step - FADE_STEPS) / FADE_STEPS)
+                ratio = 1.0 - p
+                self._apply_text_fade(ratio, page_name=to_page)
+                self._apply_page_fade(to_page, ratio)
+
+            self.root.after(FADE_INTERVAL_MS, lambda: animate(step + 1))
+
+        animate(0)
 
     def _register_text_fade_widgets(self):
         self._clock_fade_widgets = [
@@ -834,6 +922,8 @@ class TopmostClockApp:
             self.weather_main_label,
             self.weather_sub_label,
             self.weather_detail_label,
+            self.radar_title,
+            self.radar_status_label,
             self.small_time_label,
         ]
         self._text_base_colors = {}
@@ -899,7 +989,14 @@ class TopmostClockApp:
         border_color = self._blend_color(CARD_BORDER, PANEL_BG, ratio)
         icon_bg = bg_color
 
-        for widget in (self.weather_card, self.weather_visual_row, self.weather_text_col):
+        for widget in (
+            self.weather_card,
+            self.weather_body,
+            self.weather_left,
+            self.weather_right,
+            self.weather_visual_row,
+            self.weather_text_col,
+        ):
             try:
                 widget.config(bg=bg_color)
             except tk.TclError:
@@ -915,7 +1012,55 @@ class TopmostClockApp:
         except tk.TclError:
             pass
 
+        try:
+            self.radar_canvas.config(bg=self._blend_color("#0d0d0d", PANEL_BG, ratio), highlightbackground=border_color)
+        except tk.TclError:
+            pass
+
         self._draw_weather_icon(self._last_weather_code, fade_ratio=ratio)
+        self._apply_radar_fade_overlay(ratio)
+
+    def _apply_radar_fade_overlay(self, ratio):
+        ratio = max(0.0, min(1.0, float(ratio)))
+        try:
+            self.radar_canvas.delete("fade_overlay")
+            if ratio <= 0.001:
+                return
+            canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
+            canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
+            if ratio >= 0.995:
+                self.radar_canvas.create_rectangle(
+                    0,
+                    0,
+                    canvas_w,
+                    canvas_h,
+                    fill=PANEL_BG,
+                    outline="",
+                    tags="fade_overlay",
+                )
+                return
+
+            if ratio >= 0.75:
+                stipple = "gray75"
+            elif ratio >= 0.5:
+                stipple = "gray50"
+            elif ratio >= 0.25:
+                stipple = "gray25"
+            else:
+                stipple = "gray12"
+
+            self.radar_canvas.create_rectangle(
+                0,
+                0,
+                canvas_w,
+                canvas_h,
+                fill=PANEL_BG,
+                outline="",
+                stipple=stipple,
+                tags="fade_overlay",
+            )
+        except tk.TclError:
+            pass
 
     def _update_secondary_clock_display(self):
         if self._current_page == "clock":
@@ -954,18 +1099,13 @@ class TopmostClockApp:
             self._click_through = False
 
         set_window_long(hwnd, GWL_EXSTYLE, style)
-        self.root.attributes("-alpha", self._alpha_value)
+        self._apply_window_alpha()
 
     def _on_alpha_change(self, value):
         percent = max(35, min(100, int(float(value))))
         self._alpha_value = percent / 100.0
         self.alpha_value_label.config(text=f"{percent}%")
-        self.root.attributes("-alpha", self._alpha_value)
-
-        if self._click_through and sys.platform.startswith("win"):
-            hwnd = self.root.winfo_id()
-            alpha_byte = max(1, min(255, int(self._alpha_value * 255)))
-            ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, alpha_byte, LWA_ALPHA)
+        self._apply_window_alpha()
 
     def _toggle_click_through(self, _event=None):
         self._set_click_through(not self._click_through)
@@ -1065,7 +1205,205 @@ class TopmostClockApp:
                 self.weather_condition_label.config(text=payload.get("condition", "--"))
                 self._last_weather_code = payload.get("code", -1)
                 self._draw_weather_icon(self._last_weather_code)
+            elif kind == "radar":
+                self._update_radar_ui(payload)
         self.root.after(250, self._drain_ui_queue)
+
+    def _update_radar_ui(self, payload):
+        base_image_b64 = payload.get("base_image_b64", "")
+        image_b64 = payload.get("image_b64", "")
+        status_text = payload.get("status", "Radar unavailable")
+
+        self.radar_status_label.config(text=status_text)
+        canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
+        canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
+
+        if not base_image_b64 and not image_b64:
+            self._draw_radar_placeholder(status_text)
+            return
+
+        self.radar_canvas.delete("all")
+
+        if base_image_b64:
+            try:
+                self._radar_base_photo = tk.PhotoImage(data=base_image_b64, format="png")
+                self.radar_canvas.create_image(
+                    canvas_w / 2,
+                    canvas_h / 2,
+                    image=self._radar_base_photo,
+                    anchor="center",
+                )
+            except tk.TclError:
+                self._radar_base_photo = None
+
+        if image_b64:
+            try:
+                self._radar_photo = tk.PhotoImage(data=image_b64, format="png")
+                self.radar_canvas.create_image(
+                    canvas_w / 2,
+                    canvas_h / 2,
+                    image=self._radar_photo,
+                    anchor="center",
+                )
+            except tk.TclError:
+                if self._radar_base_photo is None:
+                    self._draw_radar_placeholder("Radar image decode failed")
+
+        if self._radar_base_photo is None and self._radar_photo is None:
+            self._draw_radar_placeholder(status_text)
+            return
+
+        self._apply_radar_fade_overlay(self._weather_fade_ratio)
+
+    def _draw_radar_placeholder(self, text):
+        self.radar_canvas.delete("all")
+        canvas_w = max(1, self.radar_canvas.winfo_width(), self.radar_canvas.winfo_reqwidth())
+        canvas_h = max(1, self.radar_canvas.winfo_height(), self.radar_canvas.winfo_reqheight())
+        self.radar_canvas.create_text(
+            canvas_w / 2,
+            canvas_h / 2,
+            text=text,
+            fill=MUTED_TEXT_COLOR,
+            font=("Consolas", 10, "bold"),
+            justify="center",
+            width=max(120, canvas_w - 16),
+        )
+        self._apply_radar_fade_overlay(self._weather_fade_ratio)
+
+    def _request_radar_refresh(self, force=False):
+        now = datetime.now()
+        if self._busy_radar:
+            return
+        if not force and (now - self._last_radar_fetch).total_seconds() < RADAR_UPDATE_INTERVAL_SEC:
+            return
+        self._busy_radar = True
+        threading.Thread(target=self._fetch_radar_worker, daemon=True).start()
+
+    def _latlon_to_tile(self, lat, lon, zoom):
+        lat = max(-85.0511, min(85.0511, float(lat)))
+        lon = max(-179.9999, min(179.9999, float(lon)))
+        n = 2 ** int(zoom)
+        x = int((lon + 180.0) / 360.0 * n)
+        lat_rad = math.radians(lat)
+        y = int((1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
+        x = max(0, min(n - 1, x))
+        y = max(0, min(n - 1, y))
+        return x, y
+
+    def _http_get_bytes(self, url, headers=None, timeout=8):
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+
+    def _load_persisted_radar_zoom(self):
+        if not os.path.exists(self._radar_state_path):
+            return None
+        try:
+            with open(self._radar_state_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            zoom = int(payload.get("last_good_zoom"))
+            return max(4, min(10, zoom))
+        except Exception:
+            return None
+
+    def _save_persisted_radar_zoom(self, zoom):
+        try:
+            payload = {
+                "last_good_zoom": int(max(4, min(10, int(zoom)))),
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            with open(self._radar_state_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=True, indent=2)
+        except Exception:
+            pass
+
+    def _fetch_radar_worker(self):
+        try:
+            lat, lon, city = self._resolve_radar_location()
+            if lat is None or lon is None:
+                self._ui_queue.put(("radar", {"status": "Radar location is not set"}))
+                return
+
+            meta = self._http_get_json("https://api.rainviewer.com/public/weather-maps.json")
+            host = meta.get("host", "https://tilecache.rainviewer.com")
+            radar = meta.get("radar", {})
+            frames = radar.get("past", []) + radar.get("nowcast", [])
+            if not frames:
+                self._ui_queue.put(("radar", {"status": "Radar frame unavailable"}))
+                return
+
+            latest = frames[-1]
+            path = latest.get("path")
+            if not path:
+                self._ui_queue.put(("radar", {"status": "Radar path unavailable"}))
+                return
+
+            requested_zoom = self.radar_zoom
+            radar_encoded = ""
+            map_encoded = ""
+            used_zoom = None
+            map_headers = {"User-Agent": "clock-topmost/1.0"}
+
+            for zoom in range(requested_zoom, 3, -1):
+                x, y = self._latlon_to_tile(lat, lon, zoom)
+                map_url = f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png"
+                tile_url = f"{host}{path}/256/{zoom}/{x}/{y}/2/1_1.png"
+                try:
+                    map_bytes = self._http_get_bytes(map_url, headers=map_headers, timeout=10)
+                    map_encoded = base64.b64encode(map_bytes).decode("ascii")
+                    used_zoom = zoom
+                except Exception:
+                    map_encoded = ""
+                    continue
+
+                try:
+                    image_bytes = self._http_get_bytes(tile_url, timeout=10)
+                    radar_encoded = base64.b64encode(image_bytes).decode("ascii")
+                except Exception:
+                    radar_encoded = ""
+
+                # Map tile is mandatory, radar overlay is optional.
+                if map_encoded:
+                    break
+
+            if not map_encoded:
+                self._ui_queue.put(("radar", {"status": "Radar map tile unavailable"}))
+                return
+
+            frame_time = latest.get("time")
+            if frame_time:
+                updated = datetime.fromtimestamp(frame_time).strftime("%H:%M")
+                status = f"{city}  updated {updated}"
+            else:
+                status = f"{city}  updated"
+
+            if used_zoom is not None and used_zoom != requested_zoom:
+                status = f"{status}  (zoom {requested_zoom}->{used_zoom})"
+            if used_zoom is not None:
+                self._save_persisted_radar_zoom(used_zoom)
+
+            if not radar_encoded:
+                status = f"{status}  (radar overlay unavailable)"
+
+            self._ui_queue.put(
+                (
+                    "radar",
+                    {
+                        "base_image_b64": map_encoded,
+                        "image_b64": radar_encoded,
+                        "status": status,
+                    },
+                )
+            )
+            self._last_radar_fetch = datetime.now()
+        except Exception as exc:
+            self._ui_queue.put(("radar", {"status": f"Radar fetch failed: {exc}"}))
+        finally:
+            self._busy_radar = False
+
+    def _resolve_radar_location(self):
+        # Keep radar center fixed on Toyota area regardless of weather location settings.
+        return RADAR_DEFAULT_LAT, RADAR_DEFAULT_LON, RADAR_DEFAULT_CITY
 
     def _draw_weather_icon(self, code, fade_ratio=0.0):
         fade_ratio = max(0.0, min(1.0, float(fade_ratio)))
@@ -1282,6 +1620,7 @@ class TopmostClockApp:
         if minute_key != self._last_minute_key:
             self._last_minute_key = minute_key
             self._request_weather_refresh()
+            self._request_radar_refresh()
 
         self.root.after(120, self._tick)
 
