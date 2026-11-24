@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>Topmost Clock の設定</title>
+  <style>
+    :root { --bg: #0f1113; --card: #171a1d; --border: #2a2f34; --text: #e8eaed; --muted: #959ca6; --accent: #5fd7ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 18px 20px; background: var(--bg); color: var(--text); font: 13px "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif; user-select: none; }
+    h1 { font-size: 15px; margin: 0 0 4px; }
+    .desc { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+    .card h2 { font-size: 12px; color: var(--accent); margin: 0 0 8px; letter-spacing: .04em; }
+    label { cursor: pointer; }
+    .mode { display: flex; flex-direction: column; gap: 6px; }
+    .mode select { margin-left: 6px; }
+    .row { display: grid; grid-template-columns: 22px 64px 1fr 74px; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid #22262a; }
+    .row:first-of-type { border-top: 0; }
+    .row .name { font-weight: 600; }
+    .row.off .name, .row.off input[type=range] { opacity: .4; }
+    .num { display: flex; align-items: center; gap: 4px; justify-content: flex-end; color: var(--muted); }
+    input[type=number] { width: 48px; background: #0c0e10; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 3px 4px; text-align: right; font: inherit; }
+    input[type=range] { width: 100%; accent-color: var(--accent); }
+    input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
+    select { background: #0c0e10; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; }
+    .disabled { opacity: .45; pointer-events: none; }
+    .note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+    .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+    button { background: #23282d; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font: inherit; cursor: pointer; }
+    button:hover { background: #2d3339; }
+    button.primary { background: #1d6f8c; border-color: #2789ad; }
+    #saved { color: #3dc47e; font-size: 12px; opacity: 0; transition: opacity .3s; }
+    #saved.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1>ページの切り替え</h1>
+  <p class="desc">変更はすぐに時計に反映され、保存されます。</p>
+
+  <div class="card">
+    <h2>切り替え方</h2>
+    <div class="mode">
+      <label><input type="radio" name="mode" value="per"> ページごとに表示時間を決める</label>
+      <label><input type="radio" name="mode" value="all"> すべてのページを同じ間隔で切り替える
+        <select id="all-sec">
+          <option value="5">5秒</option><option value="10">10秒</option><option value="15">15秒</option><option value="20">20秒</option>
+          <option value="30">30秒</option><option value="60">60秒</option><option value="120">2分</option>
+        </select></label>
+      <label><input type="radio" name="mode" value="off"> 自動で切り替えない</label>
+    </div>
+  </div>
+
+  <div class="card" id="pages-card">
+    <h2>ページごとの表示時間</h2>
+    <div id="rows"></div>
+    <div class="note">チェックを外したページは自動切り替えで飛ばします（タブからは表示できます）。地震を受信したときは、設定に関係なく地震情報に切り替わります。</div>
+  </div>
+
+  <div class="card">
+    <label><input type="checkbox" id="hover"> マウスが時計の上にある間は切り替えを止める</label>
+  </div>
+
+  <div class="foot">
+    <button id="reset">初期値に戻す</button>
+    <span id="saved">保存しました</span>
+    <button id="close" class="primary">閉じる</button>
+  </div>
+  <script src="settings.js"></script>
+</body>
+</html>

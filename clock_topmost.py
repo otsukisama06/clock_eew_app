@@ -28,6 +28,15 @@ def _hide_console_window_on_windows():
         pass
 
 
+def _set_windows_app_user_model_id():
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("tugu.clock.topmost")
+    except Exception:
+        pass
+
+
 def _ensure_pythonw_on_windows():
     if not sys.platform.startswith("win"):
         return
@@ -442,7 +451,12 @@ class TopmostClockApp:
         self._page_names = ["clock", "weather", "status"]
         self._page_index = 0
         self._current_page = "clock"
-        self._page_switch_seconds = max(3, int(os.environ.get("CLOCK_PAGE_SECONDS", str(PAGE_SWITCH_INTERVAL_SEC))))
+        self._default_page_switch_seconds = max(3, int(os.environ.get("CLOCK_PAGE_SECONDS", str(PAGE_SWITCH_INTERVAL_SEC))))
+        self._page_switch_seconds_map = {
+            "clock": max(3, int(os.environ.get("CLOCK_PAGE_SECONDS_CLOCK", "15"))),
+            "weather": max(3, int(os.environ.get("CLOCK_PAGE_SECONDS_WEATHER", "9"))),
+            "status": max(3, int(os.environ.get("CLOCK_PAGE_SECONDS_STATUS", "9"))),
+        }
         self._fade_animating = False
         self._slide_animating = False
         self._clock_fade_ratio = 0.0
@@ -487,11 +501,13 @@ class TopmostClockApp:
         self.root.configure(bg=WINDOW_BG)
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", self._alpha_value)
-        self.root.overrideredirect(True)
+        self.root.overrideredirect(False)
+        self.root.resizable(True, True)
 
         self._place_top_right(self.base_width, self.base_height)
         self._apply_toolwindow_hint()
-        self._apply_no_taskbar_entry()
+        self._apply_taskbar_entry()
+        self.root.after(80, self._refresh_taskbar_entry)
 
         self.root.bind("<Escape>", lambda _event: self.root.destroy())
         self.root.bind("<Button-3>", lambda _event: self.root.destroy())
@@ -670,7 +686,7 @@ class TopmostClockApp:
         self._register_text_fade_widgets()
 
         self.root.after(200, self._drain_ui_queue)
-        self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
+        self._schedule_next_page_rotation()
         self._request_weather_refresh(force=True)
         self._request_radar_refresh(force=True)
 
@@ -775,11 +791,12 @@ class TopmostClockApp:
     def _apply_toolwindow_hint(self):
         if sys.platform.startswith("win"):
             try:
-                self.root.wm_attributes("-toolwindow", True)
+                # Keep APP window behavior so Windows can create a taskbar button.
+                self.root.wm_attributes("-toolwindow", False)
             except tk.TclError:
                 pass
 
-    def _apply_no_taskbar_entry(self):
+    def _apply_taskbar_entry(self):
         if not sys.platform.startswith("win"):
             return
         try:
@@ -788,11 +805,16 @@ class TopmostClockApp:
             get_window_long = user32.GetWindowLongPtrW
             set_window_long = user32.SetWindowLongPtrW
             style = get_window_long(hwnd, GWL_EXSTYLE)
-            style = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+            style = (style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
             set_window_long(hwnd, GWL_EXSTYLE, style)
             user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
         except Exception:
             pass
+
+    def _refresh_taskbar_entry(self):
+        if not sys.platform.startswith("win"):
+            return
+        self._apply_taskbar_entry()
 
     def _build_pages(self):
         page_clock = tk.Frame(self.page_host, bg=PANEL_BG)
@@ -1010,6 +1032,13 @@ class TopmostClockApp:
             self.root.update_idletasks()
             self._update_status_panel(force=True)
 
+    def _get_current_page_duration_ms(self):
+        seconds = self._page_switch_seconds_map.get(self._current_page, self._default_page_switch_seconds)
+        return max(3000, int(seconds * 1000))
+
+    def _schedule_next_page_rotation(self):
+        self.root.after(self._get_current_page_duration_ms(), self._rotate_page)
+
     def _rotate_page(self):
         if self._fade_animating or self._slide_animating:
             self.root.after(120, self._rotate_page)
@@ -1024,7 +1053,7 @@ class TopmostClockApp:
 
         if page_name == self._current_page:
             self._fade_animating = False
-            self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
+            self._schedule_next_page_rotation()
             return
 
         self._run_slide_in(page_name, self._finish_page_transition)
@@ -1034,7 +1063,7 @@ class TopmostClockApp:
         self._apply_text_fade(0.0, page_name="weather")
         self._apply_page_fade("weather", 0.0)
         self._fade_animating = False
-        self.root.after(self._page_switch_seconds * 1000, self._rotate_page)
+        self._schedule_next_page_rotation()
 
     def _run_slide_in(self, page_name, on_done=None):
         if self._slide_animating:
@@ -2236,6 +2265,7 @@ def _load_env_file():
 
 def main():
     _load_env_file()
+    _set_windows_app_user_model_id()
     _ensure_pythonw_on_windows()
     _hide_console_window_on_windows()
     root = tk.Tk()
