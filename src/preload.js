@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('clock', {
   quit: () => ipcRenderer.send('quit'),
   quakeAlert: () => ipcRenderer.send('quake-alert'),
   quakeAlertEnd: () => ipcRenderer.send('quake-alert-end'),
+  // OS の通知 (Windows の通知センター / Linux の通知) に出す
+  notify: (n) => ipcRenderer.send('notify', n),
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   onTest: (cb) => ipcRenderer.on('test-eew', (_e, kind) => cb(kind)),
 });

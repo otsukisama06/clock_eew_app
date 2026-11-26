@@ -145,6 +145,17 @@ const Quake = {
     App.takeover(kind, label);
     if (firstWarn) Sound.play('warning');
     else if (isNew && !e.cancel) Sound.play('forecast');
+    // 通知は第 1 報・警報に切り替わったとき・取消のときだけ (続報ごとには出さない)
+    if (isNew || firstWarn || e.cancel) {
+      const top = e.areas.filter((a) => a.warn).slice(0, 4).map((a) => a.name).join('、');
+      window.clock.notify({
+        title: label,
+        body: e.cancel ? `${e.name} の緊急地震速報は取り消されました`
+          : `${e.name}　予想最大震度${shindoLabel(e.maxInt)}　M${e.mag != null ? Number(e.mag).toFixed(1) : '不明'}`
+            + (e.everWarn ? `\n強い揺れに警戒してください${top ? `（${top} など）` : ''}` : ''),
+        level: e.cancel ? 'normal' : e.everWarn ? 'warning' : 'forecast',
+      });
+    }
 
     // 最終報・取消は少し表示してから戻る。続報が来なければ 3 分で戻る。
     this.releaseAt = Date.now() + (e.cancel ? 20e3 : e.final ? 90e3 : 180e3);
@@ -237,8 +248,16 @@ const Quake = {
 
     this.info = q;
     this.mode = 'info';
-    App.takeover('info', `${INFO_TYPE[q.issue.type] || '地震情報'}${q._demo ? ' テスト' : ''}`);
+    const infoTitle = `${INFO_TYPE[q.issue.type] || '地震情報'}${q._demo ? ' テスト' : ''}`;
+    App.takeover('info', infoTitle);
     Sound.play('info');
+    const ih = eq.hypocenter || {};
+    window.clock.notify({
+      title: infoTitle,
+      body: `${ih.name || '震源調査中'}　最大震度${shindoLabel(p2pScaleKey(eq.maxScale))}`
+        + (ih.magnitude > 0 ? `　M${ih.magnitude.toFixed(1)}` : '') + (tsunami ? `\n${tsunami[0]}` : ''),
+      level: (tsunami && tsunami[1]) || eq.maxScale >= 50 ? 'warning' : 'info',
+    });
     this.releaseAt = Date.now() + this.cfg.quakeHoldSeconds * 1000;
     this.renderInfo(q, true);
   },

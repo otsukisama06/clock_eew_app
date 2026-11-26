@@ -9,7 +9,7 @@ const BASE_WIDTH = 940;
 const BASE_HEIGHT = 500;
 const TITLEBAR_H = 36;
 
-app.setAppUserModelId('tugu.clock.topmost');
+app.setAppUserModelId('tugu.clock.topmost'); // 通知・タスクバーの識別子 (package.json の build.appId と同じ)
 
 // ---------- 低負荷化 ----------
 // JS のヒープ上限を小さめに、使わない Chromium 機能 (予備の描画プロセス・メディアキー・翻訳など) を切る
@@ -566,6 +566,53 @@ ipcMain.on('quake-alert', () => {
   win.moveTop();
   win.flashFrame(true);
 });
+// ---------- OS の通知 ----------
+// Windows: 「重要な通知」(scenario=urgent) として出すと、応答不可 (おやすみモード) 中でも表示される
+//          (Windows 11。通知の設定でこのアプリの重要な通知が許可されている場合)
+// Linux:   urgency=critical はおやすみモード中でも表示される (GNOME など)
+// 音はアプリ自身が鳴らすので、通知の音は鳴らさない
+const APP_ID = 'tugu.clock.topmost';
+const liveNotifications = new Set(); // GC されるとクリックが届かなくなるので保持する
+const xmlEsc = (s) => String(s).replace(/[<>&"']/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[ch]));
+function showQuakeNotification({ title, body, level } = {}) {
+  const { Notification } = require('electron');
+  if (!Notification.isSupported() || !title) return;
+  const lines = String(body || '').split('\n').filter(Boolean).slice(0, 2);
+  const important = level !== 'normal';
+  const opts = { title: String(title), body: lines.join('\n'), silent: true, icon: makeIcon(64) };
+  if (process.platform === 'win32') {
+    opts.toastXml = `<toast${important ? ' scenario="urgent"' : ''} duration="long" launch="show">`
+      + `<visual><binding template="ToastGeneric"><text>${xmlEsc(title)}</text>${lines.map((l) => `<text>${xmlEsc(l)}</text>`).join('')}</binding></visual>`
+      + '<audio silent="true"/></toast>';
+  } else {
+    opts.urgency = important ? 'critical' : 'normal';
+    opts.timeoutType = level === 'warning' ? 'never' : 'default';
+  }
+  const n = new Notification(opts);
+  liveNotifications.add(n);
+  const drop = () => liveNotifications.delete(n);
+  n.on('click', () => { showWindow(); drop(); });
+  n.on('close', drop);
+  n.on('failed', (_e, err) => { console.error('notification failed', err); drop(); });
+  n.on('show', () => { if (process.env.CLOCK_DEBUG_DIR) console.log('notification shown:', title); });
+  n.show();
+  setTimeout(drop, 10 * 60 * 1000);
+}
+ipcMain.on('notify', (_e, n) => showQuakeNotification(n));
+
+// Windows の通知は、同じ AppUserModelID を持つスタートメニューのショートカットが無いと出ない。
+// インストール版はインストーラーが作るので、ソースから起動したときだけここで作る
+function ensureDevStartMenuShortcut() {
+  if (process.platform !== 'win32' || app.isPackaged) return;
+  const file = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Topmost Clock (開発版).lnk');
+  if (fs.existsSync(file)) return;
+  const { shell } = require('electron');
+  shell.writeShortcutLink(file, {
+    target: process.execPath, args: `"${APP_DIR}"`, cwd: APP_DIR,
+    description: 'Topmost Clock (ソースから起動)', appUserModelId: APP_ID,
+  });
+}
+
 ipcMain.on('quake-alert-end', () => {
   if (!win) return;
   win.flashFrame(false);
@@ -576,6 +623,7 @@ app.on('second-instance', showWindow);
 
 app.whenReady().then(() => {
   loadSettings();
+  try { ensureDevStartMenuShortcut(); } catch (e) { console.error('start menu shortcut', e); }
   createWindow();
   tray = new Tray(makeIcon(32));
   tray.setToolTip('Topmost Clock');
