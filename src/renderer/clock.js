@@ -1,60 +1,43 @@
-// 7 セグメント時計
-// 太めのセグメント (六角形) を計算で作る。T = 太さ, G = すき間
-const SEG_W = 104, SEG_H = 186, T = 22, G = 2.5;
-function hSeg(yc, x0, x1) { const h = T / 2; return [[x0, yc], [x0 + h, yc - h], [x1 - h, yc - h], [x1, yc], [x1 - h, yc + h], [x0 + h, yc + h]]; }
-function vSeg(xc, y0, y1) { const h = T / 2; return [[xc, y0], [xc + h, y0 + h], [xc + h, y1 - h], [xc, y1], [xc - h, y1 - h], [xc - h, y0 + h]]; }
-const SEGMENTS = (() => {
-  const h = T / 2, L = h + 1, R = SEG_W - h - 1, top = h + 1, mid = SEG_H / 2, bot = SEG_H - h - 1;
-  return {
-    a: hSeg(top, L + G, R - G), g: hSeg(mid, L + G, R - G), d: hSeg(bot, L + G, R - G),
-    f: vSeg(L, top + G, mid - G), b: vSeg(R, top + G, mid - G),
-    e: vSeg(L, mid + G, bot - G), c: vSeg(R, mid + G, bot - G),
-  };
-})();
-const DIGIT_MAP = {
-  0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg',
-};
-
-function makeDigit(el) {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 104 186');
-  const polys = {};
-  for (const [k, pts] of Object.entries(SEGMENTS)) {
-    const p = document.createElementNS(ns, 'polygon');
-    p.setAttribute('points', pts.map((q) => q.join(',')).join(' '));
-    p.style.fill = 'var(--off)';
-    svg.appendChild(p);
-    polys[k] = p;
-  }
-  el.appendChild(svg);
-  let last = -1;
-  return (n) => {
-    if (n === last) return;
-    last = n;
-    const on = DIGIT_MAP[n] || '';
-    for (const [k, p] of Object.entries(polys)) p.style.fill = on.includes(k) ? 'var(--on)' : 'var(--off)';
-  };
-}
+// メインの時計 (文字表示)
+// 低負荷: 1 秒に 1 回だけ更新し、変わった文字だけ書き換える。コロンの点滅と分のバーは CSS アニメーションに任せる
+const WEEK_JA = ['日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日'];
+const WEEK_SHORT = ['日', '月', '火', '水', '木', '金', '土'];
 
 const Clock = {
   init() {
-    this.d = ['h1', 'h2', 'm1', 'm2', 's1', 's2'].map((id) => makeDigit(document.getElementById(id)));
-    this.colon = $('#colon');
-    this.dateEl = $('#date');
-    this.mini = $('#clock-mini');
+    this.els = {
+      h: $('#c-h'), m: $('#c-m'), s: $('#c-sec'),
+      mh: $('#mini-h'), mm: $('#mini-m'), ms: $('#mini-s'),
+      date: $('#clock-date'), hdate: $('#date'), bar: $('#c-minute-bar'),
+    };
+    this.prev = {};
     this.tick();
+  },
+  set(key, text) {
+    if (this.prev[key] === text) return;
+    this.prev[key] = text;
+    this.els[key].textContent = text;
   },
   tick() {
     const now = new Date();
-    const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
-    [Math.floor(h / 10), h % 10, Math.floor(m / 10), m % 10, Math.floor(s / 10), s % 10].forEach((v, i) => this.d[i](v));
-    this.colon.classList.toggle('dim', now.getMilliseconds() >= 500);
-    const W = ['日', '月', '火', '水', '木', '金', '土'];
-    this.dateEl.textContent = `${now.getFullYear()}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())} (${W[now.getDay()]})`;
-    this.mini.innerHTML = `${pad2(h)}<span class="blink">:</span>${pad2(m)}<span class="s">${pad2(s)}</span>`;
-    // 次の 0.5 秒境界で更新 (コロン点滅用)
-    const ms = now.getMilliseconds();
-    setTimeout(() => this.tick(), (ms < 500 ? 500 - ms : 1000 - ms) + 5);
+    const h = pad2(now.getHours()), m = pad2(now.getMinutes()), s = pad2(now.getSeconds());
+    this.set('h', h); this.set('m', m); this.set('s', s);
+    this.set('mh', h); this.set('mm', m); this.set('ms', s);
+    this.set('date', `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${WEEK_JA[now.getDay()]}`);
+    this.set('hdate', `${now.getMonth() + 1}/${now.getDate()} (${WEEK_SHORT[now.getDay()]})`);
+    // 分のバー: 次の秒の位置まで 1 秒かけて滑らかに伸ばす (transform の transition は GPU で動くので軽い)
+    const bar = this.els.bar, sec = now.getSeconds();
+    if (sec === 0 || !this.barStarted) {
+      // 分の始め (と起動直後) は逆戻りのアニメーションをさせずに一瞬で位置を合わせる
+      this.barStarted = true;
+      bar.style.transition = 'none';
+      bar.style.transform = `scaleX(${sec / 60})`;
+      void bar.offsetWidth;
+    }
+    bar.style.transition = `transform ${(1000 - now.getMilliseconds()) / 1000}s linear`;
+    bar.style.transform = `scaleX(${(sec + 1) / 60})`;
+    setTimeout(() => this.tick(), 1000 - now.getMilliseconds() + 5);
   },
+  // 時計の下に、今の天気を小さく表示
+  setInfo(html) { $('#clock-info').innerHTML = html; },
 };

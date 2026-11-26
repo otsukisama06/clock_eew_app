@@ -16,20 +16,12 @@
       <div class="spacer"></div>
       <div id="warn-chip" hidden></div>
       <div id="date"></div>
-      <div id="clock-mini"></div>
+      <div id="clock-mini"><span id="mini-h"></span><span class="colon">:</span><span id="mini-m"></span><span class="s" id="mini-s"></span></div>
       <div id="controls">
         <button id="btn-top" title="常に手前に表示">TOP</button>
         <button id="btn-settings" title="設定 (ページの表示時間など)">⚙ 設定</button>
         <button id="btn-mute" title="音のオン/オフ">♪</button>
-        <select id="interval" title="ページの自動切替の間隔">
-          <option value="default">ページごと</option>
-          <option value="5">5秒</option><option value="10">10秒</option><option value="15">15秒</option>
-          <option value="20">20秒</option><option value="30">30秒</option><option value="60">60秒</option>
-          <option value="120">2分</option><option value="0">切替なし</option>
-        </select>
         <input id="opacity" type="range" min="30" max="100" value="100" title="不透明度">
-        <button id="btn-min" title="最小化">–</button>
-        <button id="btn-close" title="終了">×</button>
       </div>
       <div id="progress"></div>
     </header>
@@ -37,12 +29,12 @@
     <main id="pages">
       <!-- 時計 -->
       <section class="page" data-page="clock" data-label="時計">
-        <div id="clock-digits" class="rv">
-          <div class="digit" id="h1"></div><div class="digit" id="h2"></div>
-          <div id="colon"><span></span><span></span></div>
-          <div class="digit" id="m1"></div><div class="digit" id="m2"></div>
+        <div id="clock-face">
+          <div id="clock-time" class="rv"><span id="c-hm"><span id="c-h">--</span><span class="colon">:</span><span id="c-m">--</span></span><span id="c-sec">--</span></div>
+          <div id="clock-minute" class="rv"><div id="c-minute-bar"></div></div>
+          <div id="clock-date" class="rv"></div>
+          <div id="clock-info" class="rv"></div>
         </div>
-        <div id="clock-sec"><div class="digit small" id="s1"></div><div class="digit small" id="s2"></div></div>
       </section>
 
       <!-- 天気 -->

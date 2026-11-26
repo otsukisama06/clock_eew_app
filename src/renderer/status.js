@@ -27,24 +27,29 @@ const Status = {
       grid.appendChild(el);
       this.rows[k] = { val: el.querySelector('.val'), bar: el.querySelector('.bar') };
     }
-    this.update();
-    setInterval(() => this.update(), 1000);
   },
+  // 次に表示される前に呼ぶ: 計測を始めておき、表示した瞬間から数値が出るようにする
+  prepare() {
+    if (this.timer) return;
+    this.update();
+    this.timer = setInterval(() => this.update(), 1000);
+  },
+  onShow() { this.prepare(); },
+  onHide() { clearInterval(this.timer); this.timer = null; },
   set(k, text, pct) {
+    // 変わったときだけ書き換える (毎秒の再描画を最小にする)
     const r = this.rows[k];
-    r.val.textContent = text;
+    if (r.text !== text) { r.text = text; r.val.textContent = text; }
     if (r.bar && pct != null) {
-      const p = Math.max(0, Math.min(100, pct));
-      r.bar.style.width = `${p}%`;
+      const p = Math.round(Math.max(0, Math.min(100, pct)));
+      if (r.pct === p) return;
+      r.pct = p;
+      r.bar.style.transform = `scaleX(${p / 100})`;
       r.bar.classList.toggle('hi', p >= 75 && p < 90);
       r.bar.classList.toggle('crit', p >= 90);
     }
   },
   async update() {
-    if (document.body.dataset.page !== 'status' && this.rows.cpu.val.textContent !== '--') {
-      // 非表示中も CPU 差分のためにサンプリングだけは続ける (5 秒毎)
-      if ((this._skip = (this._skip || 0) + 1) % 5) return;
-    }
     let s;
     try { s = await window.clock.sysStats(); } catch { return; }
     if (s.cpu != null) this.set('cpu', `${s.cpu.toFixed(1)} %`, s.cpu);

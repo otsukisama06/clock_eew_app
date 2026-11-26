@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('clock', {
   getConfig: () => ipcRenderer.invoke('get-config'),
@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('clock', {
   resetPageSettings: () => ipcRenderer.send('reset-page-settings'),
   openSettings: () => ipcRenderer.send('open-settings'),
   snap: () => ipcRenderer.send('snap'),
+  // 画像などのキャッシュを捨ててメモリを返す
+  clearCache: () => webFrame.clearCache(),
+  dragStart: () => ipcRenderer.send('drag-start'),
+  dragEnd: () => ipcRenderer.send('drag-end'),
   minimize: () => ipcRenderer.send('minimize'),
   quit: () => ipcRenderer.send('quit'),
   quakeAlert: () => ipcRenderer.send('quake-alert'),

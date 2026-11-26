@@ -1,6 +1,15 @@
 // ページ切替・地震割り込み・ウィンドウ操作
 const PAGE_ORDER = ['clock', 'weather', 'radar', 'status', 'quake'];
-const PAGE_HOOKS = { radar: () => Radar.onShow(), quake: () => Quake.onShow() };
+// 各ページの準備 (prepare: 表示の数秒前に裏で読み込み) / 表示 / 非表示 の処理
+const PAGE_HOOKS = {
+  radar: { prepare: () => Radar.prepare(), show: () => Radar.onShow(), hide: () => Radar.onHide() },
+  status: { prepare: () => Status.prepare(), show: () => Status.onShow(), hide: () => Status.onHide() },
+  quake: { prepare: () => Quake.prepare(), show: () => Quake.onShow() },
+  weather: { prepare: () => Weather.prepare() },
+};
+const hook = (page, kind) => { const f = PAGE_HOOKS[page] && PAGE_HOOKS[page][kind]; if (f) f(); };
+// 切り替えの何秒前に次のページを準備するか
+const PREPARE_LEAD_SEC = 5;
 
 const App = {
   current: null,
@@ -38,11 +47,22 @@ const App = {
     $('#btn-top').onclick = () => window.clock.setTopmost(!this.state.topmost);
     $('#btn-settings').onclick = () => window.clock.openSettings();
     $('#btn-mute').onclick = () => window.clock.setMuted(!this.state.muted);
-    $('#interval').onchange = (e) => window.clock.setPageInterval(e.target.value === 'default' ? null : Number(e.target.value));
-    $('#btn-min').onclick = () => window.clock.minimize();
-    $('#btn-close').onclick = () => window.clock.quit();
     $('#opacity').oninput = (e) => window.clock.setOpacity(e.target.value / 100);
-    $('#bar').addEventListener('dblclick', () => window.clock.snap());
+    // ドラッグでウィンドウを移動 (ボタン・入力欄・地図の上は除く)
+    const NO_DRAG = 'button, input, select, a, .map, .leaflet-control';
+    document.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.target.closest(NO_DRAG)) return;
+      e.preventDefault();
+      document.body.classList.add('dragging');
+      window.clock.dragStart();
+    });
+    const endDrag = () => {
+      if (!document.body.classList.contains('dragging')) return;
+      document.body.classList.remove('dragging');
+      window.clock.dragEnd();
+    };
+    window.addEventListener('mouseup', endDrag);
+    window.addEventListener('blur', endDrag);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'F6') window.clock.snap();
       if (e.key === 'Escape' && this.alerting) Quake.release();
@@ -83,10 +103,6 @@ const App = {
     $('#btn-mute').textContent = s.muted ? '♪ OFF' : '♪ ON';
     $('#opacity').value = Math.round(s.opacity * 100);
     Sound.muted = s.muted;
-    const iv = s.pageInterval == null ? 'default' : String(s.pageInterval);
-    const sel = $('#interval');
-    if (![...sel.options].some((o) => o.value === iv)) sel.add(new Option(`${s.pageInterval}秒`, iv));
-    sel.value = iv;
     // 切り替え設定が変わったら、今のページのタイマーを掛け直す
     const key = JSON.stringify([s.pageInterval, s.pageSeconds, s.pageEnabled]);
     const changed = this._schedKey !== undefined && this._schedKey !== key;
@@ -105,23 +121,33 @@ const App = {
     const prev = this.current && document.querySelector(`.page[data-page="${this.current}"]`);
     const next = document.querySelector(`.page[data-page="${page}"]`);
     document.querySelectorAll('.page.leaving').forEach((el) => el.classList.remove('leaving'));
-    if (prev) { prev.classList.remove('active'); prev.classList.add('leaving'); setTimeout(() => prev.classList.remove('leaving'), 450); }
+    if (prev) {
+      const prevName = this.current;
+      prev.classList.remove('active'); prev.classList.add('leaving');
+      setTimeout(() => { prev.classList.remove('leaving'); if (this.current !== prevName) hook(prevName, 'hide'); }, 350);
+    }
     next.classList.add('active');
     stagger(next);
     this.current = page;
     document.body.dataset.page = page;
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
-    setTimeout(() => PAGE_HOOKS[page] && PAGE_HOOKS[page](), 30);
+    hook(page, 'show');
   },
 
-  // 自動切替: チェックの外れたページは飛ばす
-  next(manual = false) {
+  // 自動切替で次に出すページ (チェックの外れたページは飛ばす)
+  nextPage(manual = false) {
     const en = (this.state && this.state.pageEnabled) || {};
     const i = PAGE_ORDER.indexOf(this.current);
     for (let k = 1; k <= PAGE_ORDER.length; k++) {
       const p = PAGE_ORDER[(i + k) % PAGE_ORDER.length];
-      if (manual || en[p] !== false) { this.show(p); break; }
+      if (manual || en[p] !== false) return p;
     }
+    return this.current;
+  },
+
+  next(manual = false) {
+    const p = this.nextPage(manual);
+    if (p !== this.current) { hook(p, 'prepare'); this.show(p); }
     this.schedule();
   },
 
@@ -138,7 +164,12 @@ const App = {
     // 次のページまでの残り時間をヘッダー下の細いバーで表示
     bar.style.transition = 'none'; bar.style.transform = 'scaleX(0)';
     void bar.offsetWidth;
+    // transform の transition は GPU (コンポジタ) で動くので、滑らかにしても負荷は小さい
     bar.style.transition = `transform ${sec}s linear`; bar.style.transform = 'scaleX(1)';
+    // 切り替えの少し前に次のページを裏で準備しておく (地図タイルの読み込みなど)
+    clearTimeout(this.prepTimer);
+    const upcoming = this.nextPage();
+    if (upcoming !== this.current) this.prepTimer = setTimeout(() => hook(upcoming, 'prepare'), Math.max(0, sec - PREPARE_LEAD_SEC) * 1000);
     this.timer = setTimeout(() => {
       if (this.alerting) return;
       // マウスが乗っている間は止め、離れてから少しして切り替える
@@ -151,6 +182,7 @@ const App = {
   takeover(kind, label) {
     this.alerting = true;
     clearTimeout(this.timer);
+    clearTimeout(this.prepTimer);
     document.body.classList.remove('alert-warning', 'alert-forecast', 'alert-info', 'alert-cancel');
     document.body.classList.add('alerting', `alert-${kind}`);
     const banner = $('#alert-banner');

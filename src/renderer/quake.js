@@ -68,7 +68,8 @@ const Quake = {
     });
     this.loadHistory();
     setInterval(() => this.loadHistory(), 10 * 60 * 1000);
-    setInterval(() => this.tick(), 200);
+    setInterval(() => this.tick(), 1000);
+    setInterval(() => { if (this.mode === 'eew') this.updateWaves(false); }, 200);
     window.clock.onTest((k) => this.test(k));
   },
 
@@ -88,6 +89,11 @@ const Quake = {
       const list = await window.clock.fetchJson(P2P_HISTORY);
       for (const q of list.reverse()) this.onInfo(q, false);
     } catch { }
+    if (this.mode === 'idle') this.renderIdle();
+  },
+
+  prepare() {
+    this.map.invalidateSize();
     if (this.mode === 'idle') this.renderIdle();
   },
 
@@ -334,7 +340,6 @@ const Quake = {
   },
 
   tick() {
-    if (this.mode === 'eew') this.updateWaves(false);
     if (this.mode !== 'idle' && this.releaseAt && Date.now() > this.releaseAt) this.release();
   },
 

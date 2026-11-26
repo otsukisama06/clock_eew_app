@@ -32,6 +32,8 @@ const Weather = {
     this.refresh();
     setInterval(() => this.refresh(), 10 * 60 * 1000);
   },
+  // 表示の前に、古くなっていれば取り直す
+  prepare() { if (Date.now() - (this.fetchedAt || 0) > 10 * 60 * 1000) this.refresh(); },
   setLocation(loc, name) {
     this.cfg = { ...this.cfg, lat: loc.lat, lon: loc.lon };
     $('#w-city').textContent = name ? `${name}${loc.source === 'gps' ? '（現在地）' : ''}` : this.cfg.city;
@@ -47,6 +49,7 @@ const Weather = {
     });
     try {
       const w = await window.clock.fetchJson(`https://api.open-meteo.com/v1/forecast?${q}`);
+      this.fetchedAt = Date.now();
       this.render(w);
     } catch (e) {
       $('#w-cond').textContent = '天気の取得に失敗しました';
@@ -76,5 +79,9 @@ const Weather = {
     }
     $('#w-hours').innerHTML = html;
     $('#w-updated').textContent = `更新 ${fmtTime(new Date(), false)} ・ Open-Meteo`;
+    Clock.setInfo(`<span class="ci-icon">${weatherIcon(c.weather_code, c.is_day === 0)}</span>
+      <span class="ci-temp">${c.temperature_2m.toFixed(1)}°</span><span class="ci-text">${WMO_JA[c.weather_code] || ''}</span>
+      <span class="ci-sep"></span><span class="ci-text">最高 ${d.temperature_2m_max[0].toFixed(0)}° / 最低 ${d.temperature_2m_min[0].toFixed(0)}°</span>
+      <span class="ci-sep"></span><span class="ci-text">降水 ${d.precipitation_probability_max[0] ?? '--'}%</span>`);
   },
 };
