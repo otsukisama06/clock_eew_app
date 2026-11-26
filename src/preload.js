@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('clock', {
   getTimeSync: () => ipcRenderer.invoke('get-time-sync'),
   syncTime: () => ipcRenderer.invoke('sync-time'),
   onTimeSync: (cb) => ipcRenderer.on('time-sync', (_e, t) => cb(t)),
+  // スリープ復帰時など: 情報をすべて取り直す
+  onRefreshAll: (cb) => ipcRenderer.on('refresh-all', () => cb()),
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   onTest: (cb) => ipcRenderer.on('test-eew', (_e, kind) => cb(kind)),
 });

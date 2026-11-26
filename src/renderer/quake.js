@@ -21,21 +21,29 @@ const TSUNAMI = {
 };
 
 // ---- WebSocket (自動再接続付き) ----
-function openSocket(url, { onOpen, onMessage, pingText, label }) {
-  let ws, pingTimer, retry = 0;
+// staleMs: この時間なにも届かなければ、切れているとみなしてつなぎ直す
+// (スリープ明けやネットワークの切り替えで、切断に気づかないまま止まるのを防ぐ)
+function openSocket(url, { onOpen, onMessage, pingText, label, staleMs = 5 * 60 * 1000 }) {
+  let ws, pingTimer, retry = 0, lastMsg = 0;
   const connect = () => {
     try { ws = new WebSocket(url); } catch { return schedule(); }
     ws.onopen = () => {
-      retry = 0; Quake.setConn(label, true);
+      retry = 0; lastMsg = Date.now(); Quake.setConn(label, true);
       if (onOpen) onOpen(ws);
-      if (pingText) pingTimer = setInterval(() => { try { ws.send(pingText); } catch { } }, 10000);
+      clearInterval(pingTimer);
+      pingTimer = setInterval(() => {
+        if (pingText) { try { ws.send(pingText); } catch { } }
+        if (Date.now() - lastMsg > staleMs) { try { ws.close(); } catch { } }
+      }, 10000);
     };
-    ws.onmessage = (ev) => { let d; try { d = JSON.parse(ev.data); } catch { return; } onMessage(d); };
+    ws.onmessage = (ev) => { lastMsg = Date.now(); let d; try { d = JSON.parse(ev.data); } catch { return; } onMessage(d); };
     ws.onclose = () => { clearInterval(pingTimer); Quake.setConn(label, false); schedule(); };
     ws.onerror = () => { try { ws.close(); } catch { } };
   };
   const schedule = () => setTimeout(connect, Math.min(30000, 1000 * 2 ** retry++));
   connect();
+  // 復帰時などにすぐつなぎ直す
+  return { reconnect: () => { try { ws.close(); } catch { } } };
 }
 
 const Quake = {
@@ -57,17 +65,18 @@ const Quake = {
     this.home = L.marker([cfg.lat, cfg.lon], { icon: homeIcon(), interactive: false, zIndexOffset: 500 }).addTo(this.map);
     $('#quake-dismiss').onclick = () => this.release();
 
-    openSocket(WOLFX_WS, {
-      label: 'EEW', pingText: 'ping',
+    // Wolfx は 10 秒ごとの ping に毎回返事が来るので、90 秒なにも届かなければつなぎ直す
+    this.sockets = [openSocket(WOLFX_WS, {
+      label: 'EEW', pingText: 'ping', staleMs: 90 * 1000,
       onOpen: (ws) => ws.send('query_jmaeew'),
       onMessage: (d) => { if (d.type === 'jma_eew' || (!d.type && d.EventID)) this.onEew(d); },
-    });
-    openSocket(P2P_WS, {
-      label: '地震情報',
+    }), openSocket(P2P_WS, {
+      label: '地震情報', staleMs: 10 * 60 * 1000,
       onMessage: (d) => { if (d.code === 551) this.onInfo(d, true); },
-    });
+    })];
     this.loadHistory();
-    setInterval(() => this.loadHistory(), 10 * 60 * 1000);
+    // WebSocket で取りこぼしても、履歴を 2 分ごとに取り直して最新にする
+    setInterval(() => this.loadHistory(), 2 * 60 * 1000);
     setInterval(() => this.tick(), 1000);
     setInterval(() => { if (this.mode === 'eew') this.updateWaves(false); }, 200);
     window.clock.onTest((k) => this.test(k));
@@ -88,12 +97,15 @@ const Quake = {
     try {
       const list = await window.clock.fetchJson(P2P_HISTORY);
       for (const q of list.reverse()) this.onInfo(q, false);
+      this.historyAt = nowMs();
     } catch { }
     if (this.mode === 'idle') this.renderIdle();
   },
 
   prepare() {
     this.map.invalidateSize();
+    // 1 分以上たっていれば履歴を取り直してから表示する
+    if (nowMs() - (this.historyAt || 0) > 60 * 1000) this.loadHistory();
     if (this.mode === 'idle') this.renderIdle();
   },
 
@@ -234,6 +246,11 @@ const Quake = {
     if (!q || !q.earthquake) return;
     const id = q.id || q._id;
     if (this.history.some((h) => (h.id || h._id) === id)) return;
+    // 同じ地震の古い発表 (震度速報 → 震源・震度に関する情報 など) は新しい発表で置き換える
+    const sameQuake = (h) => h.earthquake.time === q.earthquake.time && h.issue.type !== 'Foreign' && q.issue.type !== 'Foreign';
+    const older = this.history.find(sameQuake);
+    if (older && (older.issue.time || '') > (q.issue.time || '')) return; // こちらの方が古い発表
+    this.history = this.history.filter((h) => !sameQuake(h));
     this.history.unshift(q);
     this.history.sort((a, b) => (b.earthquake.time || '').localeCompare(a.earthquake.time || '') || (b.issue.time || '').localeCompare(a.issue.time || ''));
     this.history = this.history.slice(0, 30);
@@ -334,7 +351,9 @@ const Quake = {
       $('#quake-panel').innerHTML = `<div class="empty">地震情報を待っています<br><span class="small">${conn}</span></div>`;
       return;
     }
-    $('#quake-panel').innerHTML = this.infoPanel(latest, { list: 'history' }) + `<div class="muted small">接続: ${conn}</div>`;
+    $('#quake-panel').innerHTML = this.infoPanel(latest, { list: 'history' })
+      // いつ確認した情報かを出す (新しい地震が無いだけで、情報は最新であることが分かるように)
+      + `<div class="muted small">接続: ${conn}${this.historyAt ? ` ・ ${fmtTime(new Date(this.historyAt), false)} 時点で最新` : ''}</div>`;
     if (App.current === 'quake' && !this._idleShown) stagger($('#quake-panel'));
     this._idleShown = App.current === 'quake';
     this.drawInfoMap(latest, false);

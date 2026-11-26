@@ -489,7 +489,8 @@ ipcMain.handle('get-location', async () => {
 ipcMain.handle('fetch-json', async (_e, url) => {
   const u = new URL(url);
   if (u.protocol !== 'https:' || !ALLOWED_HOSTS.has(u.hostname)) throw new Error('host not allowed');
-  const res = await net.fetch(url, { headers: { 'User-Agent': 'topmost-clock/2.0' } });
+  // キャッシュを使わず毎回取りに行く (古い情報を表示しないため)
+  const res = await net.fetch(url, { cache: 'no-store', headers: { 'User-Agent': 'topmost-clock/2.0' } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 });
@@ -801,7 +802,11 @@ app.whenReady().then(() => {
   syncTime();
   setInterval(syncTime, 30 * 60 * 1000);
   // スリープから戻ると時計がずれていることがあるので同期し直す
-  require('electron').powerMonitor.on('resume', () => setTimeout(syncTime, 5000));
+  // スリープから戻ったら、時刻と表示中の情報 (天気・地震・警報・雨雲) を取り直す
+  require('electron').powerMonitor.on('resume', () => setTimeout(() => {
+    syncTime();
+    if (win) win.webContents.send('refresh-all');
+  }, 5000));
   rebuildTrayMenu();
   // クリック透過中でも戻せるように
   globalShortcut.register(CLICK_THROUGH_KEY, () => setClickThrough(!settings.clickThrough));

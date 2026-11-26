@@ -5,7 +5,7 @@ const PAGE_HOOKS = {
   radar: { prepare: () => Radar.prepare(), show: () => Radar.onShow(), hide: () => Radar.onHide() },
   status: { prepare: () => Status.prepare(), show: () => Status.onShow(), hide: () => Status.onHide() },
   quake: { prepare: () => Quake.prepare(), show: () => Quake.onShow() },
-  weather: { prepare: () => Weather.prepare() },
+  weather: { prepare: () => Weather.prepare(), show: () => Weather.onShow() },
 };
 const hook = (page, kind) => { const f = PAGE_HOOKS[page] && PAGE_HOOKS[page][kind]; if (f) f(); };
 // 切り替えの何秒前に次のページを準備するか
@@ -72,6 +72,7 @@ const App = {
     });
 
     TimeSync.init();
+    this.watchFreshness();
     Clock.init();
     Status.init();
     Weather.init(this.cfg);
@@ -111,6 +112,31 @@ const App = {
     const changed = this._schedKey !== undefined && this._schedKey !== key;
     this._schedKey = key;
     if (changed && this.current) this.schedule();
+  },
+
+  // 情報が古いままにならないように: スリープ復帰・ネット復帰・時刻の飛び (スリープの検出) で全部取り直す
+  watchFreshness() {
+    window.clock.onRefreshAll(() => this.refreshAll('resume'));
+    window.addEventListener('online', () => this.refreshAll('online'));
+    let last = Date.now();
+    setInterval(() => {
+      const now = Date.now();
+      if (now - last > 3 * 60 * 1000) this.refreshAll('time-jump'); // 30 秒ごとのはずが 3 分以上空いた
+      last = now;
+      // 雨雲を表示したままにしているときも、5 分ごとに最新の観測・予報に入れ替える
+      if (this.current === 'radar' && now - Radar.fetchedAt > 5 * 60 * 1000) Radar.prepare();
+    }, 30 * 1000);
+  },
+  refreshAll(reason) {
+    if (Date.now() - (this._refreshedAt || 0) < 20 * 1000) return; // 続けて呼ばれたときは 1 回だけ
+    this._refreshedAt = Date.now();
+    console.log('refresh all:', reason);
+    Weather.refresh();
+    Quake.loadHistory();
+    for (const s of Quake.sockets || []) s.reconnect();
+    if (typeof Warnings.refresh === 'function' && Warnings.place) Warnings.refresh();
+    Radar.fetchedAt = 0; // 次に表示するときに取り直す
+    if (this.current === 'radar') Radar.prepare();
   },
 
   // ウィンドウサイズに合わせて全体を拡大縮小 (基準 940x500)
