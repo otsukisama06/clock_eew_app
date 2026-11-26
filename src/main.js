@@ -83,6 +83,10 @@ function buildConfig() {
     quakeMinScale: num(env.CLOCK_QUAKE_MIN_SCALE, 10),
     quakeHoldSeconds: Math.max(10, num(env.CLOCK_QUAKE_HOLD_SECONDS, 60)),
     eewShowTraining: env.CLOCK_EEW_TRAINING === '1',
+    // PC の高負荷: CPU とメモリの使用率が両方ともこの値 (%) 以上の状態が続いたら PC ページで固定する
+    pcAlertCpu: Math.max(10, Math.min(100, num(env.CLOCK_PC_ALERT_CPU, 85))),
+    pcAlertMem: Math.max(10, Math.min(100, num(env.CLOCK_PC_ALERT_MEM, 85))),
+    pcAlertSeconds: Math.max(3, num(env.CLOCK_PC_ALERT_SECONDS, 10)),
     // 画面切替のアニメーション: full = フェード + スライド・順番に出る演出, light = フェードだけ。
     // Linux は GPU を使わない描画だと動きの多い演出が重いので light を既定にする
     animation: ['full', 'light'].includes(env.CLOCK_ANIMATION) ? env.CLOCK_ANIMATION : (process.platform === 'linux' ? 'light' : 'full'),
@@ -439,12 +443,38 @@ async function diskUsage() {
     return { total, used: total - free };
   } catch { return null; }
 }
+// CPU 使用率は 1 秒ごとに測っておく (PC ページの表示と高負荷の判定で同じ値を使う)
+// 高負荷: CPU とメモリが両方とも基準以上の状態が pcAlertSeconds 続いたら PC ページで固定し、
+// どちらかが基準より下がった状態 (少し余裕をもたせる) が 15 秒続いたら解除する
+const loadMon = { cpu: null, recent: [], alert: false, highSince: 0, lowSince: 0, cfg: null };
+function sampleLoad() {
+  const c = cpuPercent();
+  if (c == null) return;
+  loadMon.cpu = c;
+  loadMon.recent.push(c);
+  if (loadMon.recent.length > 5) loadMon.recent.shift();
+  const cpu = loadMon.recent.reduce((a, b) => a + b, 0) / loadMon.recent.length; // 5 秒の平均 (一瞬の跳ね上がりは無視)
+  const mem = (1 - freeMemory() / os.totalmem()) * 100;
+  const cfg = loadMon.cfg || (loadMon.cfg = buildConfig());
+  const now = Date.now();
+  const high = cpu >= cfg.pcAlertCpu && mem >= cfg.pcAlertMem;
+  const low = cpu < cfg.pcAlertCpu - 10 || mem < cfg.pcAlertMem - 5;
+  loadMon.highSince = high ? (loadMon.highSince || now) : 0;
+  loadMon.lowSince = low ? (loadMon.lowSince || now) : 0;
+  if (!loadMon.alert && loadMon.highSince && now - loadMon.highSince >= cfg.pcAlertSeconds * 1000) setPcAlert(true, cpu, mem);
+  else if (loadMon.alert && loadMon.lowSince && now - loadMon.lowSince >= 15 * 1000) setPcAlert(false, cpu, mem);
+}
+function setPcAlert(on, cpu, mem) {
+  loadMon.alert = on;
+  if (win) win.webContents.send('pc-alert', { on, cpu, mem });
+}
+ipcMain.handle('get-pc-alert', () => ({ on: loadMon.alert }));
 const appStartedAt = Date.now();
 ipcMain.handle('sys-stats', async () => {
   keepNetSampling();
   const disk = await diskUsage();
   return {
-    cpu: cpuPercent(),
+    cpu: loadMon.cpu,
     memTotal: os.totalmem(), memFree: freeMemory(),
     disk, net: netCache,
     uptime: os.uptime(),
@@ -795,6 +825,9 @@ app.whenReady().then(() => {
   loadSettings();
   try { ensureDevStartMenuShortcut(); } catch (e) { console.error('start menu shortcut', e); }
   setupAutoUpdate();
+  // 開発用: CLOCK_DEBUG_PC_ALERT=1 なら基準を 0% にして、負荷に関係なく高負荷として扱う (表示の確認用)
+  if (process.env.CLOCK_DEBUG_PC_ALERT === '1') loadMon.cfg = { ...buildConfig(), pcAlertCpu: 0, pcAlertMem: 0, pcAlertSeconds: 3 };
+  setInterval(sampleLoad, 1000);
   createWindow();
   tray = new Tray(makeIcon(32));
   tray.setToolTip(`Topmost Clock v${app.getVersion()}`);

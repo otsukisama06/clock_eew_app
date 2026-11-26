@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('clock', {
   onTimeSync: (cb) => ipcRenderer.on('time-sync', (_e, t) => cb(t)),
   // スリープ復帰時など: 情報をすべて取り直す
   onRefreshAll: (cb) => ipcRenderer.on('refresh-all', () => cb()),
+  // PC の高負荷 (CPU とメモリが両方とも高い状態が続いている)
+  getPcAlert: () => ipcRenderer.invoke('get-pc-alert'),
+  onPcAlert: (cb) => ipcRenderer.on('pc-alert', (_e, a) => cb(a)),
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   onTest: (cb) => ipcRenderer.on('test-eew', (_e, kind) => cb(kind)),
 });

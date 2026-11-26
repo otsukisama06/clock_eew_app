@@ -57,6 +57,10 @@ body.alert-warning #alert-banner { background: var(--warn); color: #fff; }
 body.alert-forecast #alert-banner { background: var(--forecast); color: #151518; }
 body.alert-info #alert-banner { background: var(--accent); color: #051018; }
 body.alert-cancel #alert-banner { background: #5a6068; color: #fff; }
+/* PC の高負荷で PC ページに固定しているとき */
+body.pc-alert #frame { border-color: #ff8c1a; }
+body.pc-alert #alert-banner { background: #ff8c1a; color: #151518; }
+body.pc-alert #progress { display: none; }
 body.alerting #tabs { display: none; }
 
 /* ---- ページ ---- */

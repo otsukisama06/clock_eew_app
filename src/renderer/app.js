@@ -73,6 +73,8 @@ const App = {
 
     TimeSync.init();
     this.watchFreshness();
+    window.clock.onPcAlert((a) => this.setPcAlert(a.on));
+    window.clock.getPcAlert().then((a) => { if (a.on) this.setPcAlert(true); }).catch(() => { });
     Clock.init();
     Status.init();
     Weather.init(this.cfg);
@@ -182,7 +184,7 @@ const App = {
 
   schedule() {
     clearTimeout(this.timer);
-    if (this.alerting) return;
+    if (this.alerting || this.pcPinned) return;
     const iv = this.state && this.state.pageInterval;
     const bar = $('#progress');
     if (iv === 0) { bar.style.transition = 'none'; bar.style.transform = 'scaleX(0)'; return; } // 自動切替しない
@@ -200,7 +202,7 @@ const App = {
     const upcoming = this.nextPage();
     if (upcoming !== this.current) this.prepTimer = setTimeout(() => hook(upcoming, 'prepare'), Math.max(0, sec - PREPARE_LEAD_SEC) * 1000);
     this.timer = setTimeout(() => {
-      if (this.alerting) return;
+      if (this.alerting || this.pcPinned) return;
       // マウスが乗っている間は止め、離れてから少しして切り替える
       if (this.hover && this.state.pauseOnHover !== false) { this.waitingHover = true; bar.classList.add('paused'); return; }
       this.next();
@@ -212,6 +214,7 @@ const App = {
     this.alerting = true;
     clearTimeout(this.timer);
     clearTimeout(this.prepTimer);
+    document.body.classList.remove('pc-alert'); // 地震の方を優先して表示する
     document.body.classList.remove('alert-warning', 'alert-forecast', 'alert-info', 'alert-cancel');
     document.body.classList.add('alerting', `alert-${kind}`);
     const banner = $('#alert-banner');
@@ -227,6 +230,30 @@ const App = {
     document.body.classList.remove('alerting', 'alert-warning', 'alert-forecast', 'alert-info', 'alert-cancel');
     $('#alert-banner').hidden = true;
     window.clock.quakeAlertEnd();
+    // 地震の表示が終わっても高負荷が続いていれば PC ページに戻る
+    if (this.pcPinned) this.pinPc(); else this.schedule();
+  },
+
+  // ---- PC の高負荷: CPU とメモリが両方とも高い間は PC ページで固定する (地震より優先度は下) ----
+  setPcAlert(on) {
+    if (this.pcPinned === on) return;
+    this.pcPinned = on;
+    if (on) { if (!this.alerting) this.pinPc(); }
+    else this.unpinPc();
+  },
+  pinPc() {
+    clearTimeout(this.timer);
+    clearTimeout(this.prepTimer);
+    document.body.classList.add('pc-alert');
+    const banner = $('#alert-banner');
+    banner.textContent = 'PC 高負荷（CPU・メモリ）';
+    banner.hidden = false;
+    if (this.current !== 'status') { hook('status', 'prepare'); this.show('status'); }
+  },
+  unpinPc() {
+    document.body.classList.remove('pc-alert');
+    if (this.alerting) return; // 地震の表示中はそのまま
+    $('#alert-banner').hidden = true;
     this.schedule();
   },
 };
