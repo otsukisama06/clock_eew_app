@@ -2,3 +2,8 @@ node_modules/
 .venv/
 __pycache__/
 *.pyc
+.env
+client_secret_*.json
+google_calendar_token.json
+clock_radar_state.json
+cmd1_*.txt
