@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('clock', {
   quakeAlertEnd: () => ipcRenderer.send('quake-alert-end'),
   // OS の通知 (Windows の通知センター / Linux の通知) に出す
   notify: (n) => ipcRenderer.send('notify', n),
+  // 時刻同期 (NTP とのずれ)
+  getTimeSync: () => ipcRenderer.invoke('get-time-sync'),
+  syncTime: () => ipcRenderer.invoke('sync-time'),
+  onTimeSync: (cb) => ipcRenderer.on('time-sync', (_e, t) => cb(t)),
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   onTest: (cb) => ipcRenderer.on('test-eew', (_e, kind) => cb(kind)),
 });

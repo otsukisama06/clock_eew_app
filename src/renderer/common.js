@@ -82,6 +82,18 @@ function homeIcon() {
   return L.divIcon({ className: '', html: '<div class="home-marker"></div>', iconSize: [12, 12], iconAnchor: [6, 6] });
 }
 
+// ---- 時刻同期: NTP で測った PC の時計とのずれを足した「正しい現在時刻」 ----
+const TimeSync = {
+  state: { offset: 0, ok: false },
+  init() {
+    window.clock.getTimeSync().then((t) => this.apply(t)).catch(() => { });
+    window.clock.onTimeSync((t) => this.apply(t));
+  },
+  apply(t) { if (t) this.state = t; },
+};
+const nowMs = () => Date.now() + (TimeSync.state.offset || 0);
+const nowDate = () => new Date(nowMs());
+
 // ---- 音 (ファイル不要。WebAudio で生成) ----
 const Sound = {
   ctx: null, muted: false,

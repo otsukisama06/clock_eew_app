@@ -19,7 +19,7 @@ const Clock = {
     this.els[key].textContent = text;
   },
   tick() {
-    const now = new Date();
+    const now = nowDate();
     const h = pad2(now.getHours()), m = pad2(now.getMinutes()), s = pad2(now.getSeconds());
     this.set('h', h); this.set('m', m); this.set('s', s);
     this.set('mh', h); this.set('mm', m); this.set('ms', s);

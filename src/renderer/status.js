@@ -17,7 +17,8 @@ const Status = {
     const defs = [
       ['cpu', 'CPU 使用率', true], ['runtime', 'アプリ起動時間', false],
       ['mem', 'メモリ使用量', true], ['uptime', 'システム稼働時間', false],
-      ['disk', 'ディスク使用量 (C:)', true], ['net', 'ネットワーク (↓ / ↑)', true],
+      ['disk', `ディスク使用量 (${/Linux/.test(navigator.userAgent) ? '/' : 'C:'})`, true], ['net', 'ネットワーク (↓ / ↑)', true],
+      ['sync', '時刻同期 (PC の時計とのずれ)', false],
     ];
     const grid = $('#status-grid');
     for (const [k, label, bar] of defs) {
@@ -59,5 +60,9 @@ const Status = {
     if (s.net) this.set('net', `${fmtRate(s.net.rx)} / ${fmtRate(s.net.tx)}`, Math.min(100, s.net.rx * 8 / 1e6));
     this.set('runtime', fmtDur(s.appRuntime));
     this.set('uptime', fmtDur(s.uptime));
+    const t = TimeSync.state;
+    this.set('sync', t.ok
+      ? `${t.offset >= 0 ? '+' : ''}${(t.offset / 1000).toFixed(3)} 秒 ・ ${t.source} ${fmtTime(new Date(t.at), false)} 同期`
+      : (t.error ? '同期できません' : '同期中...'));
   },
 };

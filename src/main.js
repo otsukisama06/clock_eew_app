@@ -83,6 +83,9 @@ function buildConfig() {
     quakeMinScale: num(env.CLOCK_QUAKE_MIN_SCALE, 10),
     quakeHoldSeconds: Math.max(10, num(env.CLOCK_QUAKE_HOLD_SECONDS, 60)),
     eewShowTraining: env.CLOCK_EEW_TRAINING === '1',
+    // 画面切替のアニメーション: full = フェード・スライド, light = 一瞬で切替。
+    // Linux は GPU を使わない描画だとフェード (地図の色反転フィルタの再計算) がとても重いので light を既定にする
+    animation: ['full', 'light'].includes(env.CLOCK_ANIMATION) ? env.CLOCK_ANIMATION : (process.platform === 'linux' ? 'light' : 'full'),
   };
 }
 
@@ -333,6 +336,7 @@ function rebuildTrayMenu() {
     { label: '表示', click: showWindow },
     { label: '設定...', click: openSettings },
     { label: '右上に移動', click: snapTopRight },
+    { label: timeSync.ok ? `時刻を同期 (ずれ ${(timeSync.offset / 1000).toFixed(2)} 秒)` : '時刻を同期', click: syncTimeWithNotice },
     { type: 'separator' },
     { label: '常に手前に表示', type: 'checkbox', checked: settings.topmost, click: (i) => setTopmost(i.checked) },
     { label: `クリック透過 (${CLICK_THROUGH_LABEL})`, type: 'checkbox', checked: settings.clickThrough, click: (i) => setClickThrough(i.checked) },
@@ -489,6 +493,71 @@ ipcMain.handle('fetch-json', async (_e, url) => {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 });
+
+// ---------- 時刻同期 ----------
+// NTP (UDP 123) で正確な時刻とのずれを測り、表示や揺れの到達予測に使う。PC の時計自体は変えない (管理者権限が要るため)。
+// UDP が通らない環境では NICT の HTTP 時刻サービスを使う。起動時・30 分ごと・スリープ復帰時に同期する。
+const NTP_HOSTS = ['ntp.nict.jp', 'time.google.com', 'time.cloudflare.com'];
+let timeSync = { offset: 0, delay: null, source: null, at: null, ok: false, error: null };
+function sntpQuery(host) {
+  return new Promise((resolve, reject) => {
+    const sock = require('dgram').createSocket('udp4');
+    const pkt = Buffer.alloc(48);
+    pkt[0] = 0x23; // LI=0, VN=4, Mode=3 (client)
+    let t0 = 0;
+    const done = (err, v) => { clearTimeout(timer); try { sock.close(); } catch { } err ? reject(err) : resolve(v); };
+    const timer = setTimeout(() => done(new Error('timeout')), 3000);
+    sock.on('error', (e) => done(e));
+    sock.on('message', (msg) => {
+      const t3 = Date.now();
+      if (msg.length < 48 || msg[1] === 0) return done(new Error('bad reply')); // stratum 0 = 拒否 (KoD)
+      const ts = (o) => (msg.readUInt32BE(o) - 2208988800) * 1000 + msg.readUInt32BE(o + 4) * 1000 / 2 ** 32;
+      const t1 = ts(32), t2 = ts(40); // サーバーの受信時刻・送信時刻
+      done(null, { offset: ((t1 - t0) + (t2 - t3)) / 2, delay: (t3 - t0) - (t2 - t1), source: host });
+    });
+    t0 = Date.now();
+    sock.send(pkt, 123, host, (err) => { if (err) done(err); });
+  });
+}
+async function httpTimeQuery() {
+  const t0 = Date.now();
+  const res = await net.fetch(`https://ntp-a1.nict.go.jp/cgi-bin/json?${t0 / 1000}`, { cache: 'no-store' });
+  const t3 = Date.now();
+  const j = await res.json();
+  if (!Number.isFinite(j.st)) throw new Error('bad reply');
+  return { offset: j.st * 1000 - (t0 + t3) / 2, delay: t3 - t0, source: 'ntp-a1.nict.go.jp (HTTP)' };
+}
+let syncing = null;
+function syncTime() {
+  if (syncing) return syncing;
+  syncing = (async () => {
+    const samples = [];
+    for (const host of NTP_HOSTS) {
+      // 1 台につき 3 回測り、往復時間がいちばん短いもの (= 誤差が小さいもの) を使う
+      for (let i = 0; i < 3; i++) { try { samples.push(await sntpQuery(host)); } catch { break; } }
+      if (samples.length) break;
+    }
+    if (!samples.length) { try { samples.push(await httpTimeQuery()); } catch (e) { timeSync = { ...timeSync, ok: false, error: e.message, at: Date.now() }; } }
+    if (samples.length) {
+      const best = samples.sort((a, b) => a.delay - b.delay)[0];
+      timeSync = { offset: Math.round(best.offset), delay: Math.round(best.delay), source: best.source, at: Date.now(), ok: true, error: null };
+    }
+    syncing = null;
+    if (win) win.webContents.send('time-sync', timeSync);
+    rebuildTrayMenu();
+    return timeSync;
+  })();
+  return syncing;
+}
+ipcMain.handle('get-time-sync', () => timeSync);
+ipcMain.handle('sync-time', () => syncTime());
+function syncTimeWithNotice() {
+  const { dialog } = require('electron');
+  syncTime().then((t) => dialog.showMessageBox({
+    type: t.ok ? 'info' : 'error', title: 'Topmost Clock',
+    message: t.ok ? `時刻を同期しました。\nPC の時計とのずれ: ${(t.offset / 1000).toFixed(3)} 秒 (${t.source})` : `時刻を同期できませんでした。\n${t.error || ''}`,
+  }));
+}
 
 ipcMain.handle('get-config', () => ({ ...buildConfig(), state: { ...settings, ...effectivePageSettings() } }));
 ipcMain.on('open-settings', () => openSettings());
@@ -721,6 +790,10 @@ app.whenReady().then(() => {
   tray = new Tray(makeIcon(32));
   tray.setToolTip('Topmost Clock');
   tray.on('click', showWindow);
+  syncTime();
+  setInterval(syncTime, 30 * 60 * 1000);
+  // スリープから戻ると時計がずれていることがあるので同期し直す
+  require('electron').powerMonitor.on('resume', () => setTimeout(syncTime, 5000));
   rebuildTrayMenu();
   // クリック透過中でも戻せるように
   globalShortcut.register(CLICK_THROUGH_KEY, () => setClickThrough(!settings.clickThrough));

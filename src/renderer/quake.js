@@ -127,7 +127,7 @@ const Quake = {
     if (e.test) return;
     if (e.training && !this.cfg.eewShowTraining && !e.demo) return;
     // 3 分以上前の電文 (接続直後の最新報など) は表示しない
-    if (!e.demo && e.announced && Date.now() - e.announced.getTime() > 3 * 60 * 1000) return;
+    if (!e.demo && e.announced && nowMs() - e.announced.getTime() > 3 * 60 * 1000) return;
 
     const seen = this.eewSeen.get(e.id);
     if (seen && seen.serial >= e.serial && !e.cancel) return;
@@ -205,7 +205,7 @@ const Quake = {
   updateWaves(force) {
     const e = this.eew;
     if (!e || e.cancel || !e.origin) return;
-    const t = (Date.now() - e.origin.getTime()) / 1000;
+    const t = (nowMs() - e.origin.getTime()) / 1000;
     const r = (v) => Math.sqrt(Math.max(0, (v * t) ** 2 - e.depth ** 2));
     const rp = r(VP), rs = r(VS);
     this.pCircle.setRadius(Math.max(1, rp * 1000));
@@ -364,7 +364,7 @@ const Quake = {
 
   // ============ テスト表示 (トレイメニューから) ============
   test(kind) {
-    const now = new Date(Date.now() + 9 * 3600e3); // JST 文字列用
+    const now = new Date(nowMs() + 9 * 3600e3); // JST 文字列用
     const f = (d) => d.toISOString().replace('T', ' ').slice(0, 19).replace(/-/g, '/');
     const origin = new Date(now.getTime() - 4000);
     const lat = this.homeLat + 0.35, lon = this.homeLon - 0.55;
@@ -392,6 +392,6 @@ const Quake = {
       ] : [],
     };
     this.onEew({ ...base, Serial: 1 });
-    setTimeout(() => this.onEew({ ...base, Serial: 2, isFinal: true, AnnouncedTime: f(new Date(Date.now() + 9 * 3600e3)) }), 8000);
+    setTimeout(() => this.onEew({ ...base, Serial: 2, isFinal: true, AnnouncedTime: f(new Date(nowMs() + 9 * 3600e3)) }), 8000);
   },
 };

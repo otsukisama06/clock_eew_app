@@ -19,6 +19,7 @@ const App = {
 
   async init() {
     this.cfg = await window.clock.getConfig();
+    document.body.classList.toggle('anim-light', this.cfg.animation === 'light');
     this.applyState(this.cfg.state);
     window.clock.onState((s) => this.applyState(s));
     this.fitRootFont();
@@ -69,6 +70,7 @@ const App = {
       if (e.key === 'ArrowRight' && !this.alerting) { this.next(true); }
     });
 
+    TimeSync.init();
     Clock.init();
     Status.init();
     Weather.init(this.cfg);
