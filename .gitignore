@@ -7,3 +7,4 @@ client_secret_*.json
 google_calendar_token.json
 clock_radar_state.json
 cmd1_*.txt
+dist/

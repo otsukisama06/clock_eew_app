@@ -3,30 +3,56 @@
 常に手前に表示する時計アプリです。天気・雨雲レーダー・PC の状態・地震情報を順番に表示します。
 緊急地震速報や地震情報を受信すると、ほかの表示を止めて地震情報だけを表示します。
 
-Electron（HTML/CSS/JavaScript）で作っています。
+Electron（HTML/CSS/JavaScript）で作っています。Windows と Linux で動きます。
 
-## 起動
+## インストール
+
+[Releases](https://github.com/otsukisama06/clock_eew_app/releases/latest) から OS に合ったファイルをダウンロードします。
+
+| OS | ファイル | 使い方 |
+|---|---|---|
+| Windows | `TopmostClock-Setup-*.exe` | 実行してインストール。デスクトップとスタートメニューにショートカットが作られます |
+| Linux (Ubuntu / Debian) | `TopmostClock-*-linux-amd64.deb` | `sudo apt install ./TopmostClock-*.deb`。アプリ一覧に登録され、初回起動時にデスクトップへショートカットを作ります |
+| Linux (その他) | `TopmostClock-*-linux-x86_64.AppImage` | `chmod +x` して実行。初回起動時にデスクトップとアプリ一覧へショートカットを作ります |
+
+- ショートカットを消してしまったときは、タスクトレイのメニュー「デスクトップにショートカットを作成」で作り直せます。
+- Windows ではコード署名をしていないため、SmartScreen の警告が出ることがあります（「詳細情報」→「実行」）。
+- Linux でタスクトレイのアイコンを出すには、デスクトップ環境が AppIndicator に対応している必要があります（GNOME は拡張機能「AppIndicator Support」が必要）。
+
+## ソースから起動（開発用）
 
 ```powershell
 npm install
-npm run shortcut          # デスクトップにショートカットを作成
+npm start
+npm run shortcut          # Windows: ソースを起動するショートカットをデスクトップに作成
 ```
 
 - ショートカットか `start_clock_hidden.vbs` から起動すると、ターミナルは表示されません。
-- `npm start` で起動することもできます（開発用。ターミナルが残ります）。
 - Windows 起動時に自動で起動するには `powershell -File scripts/make-shortcut.ps1 -Startup` を実行します。
+
+## リリースの作り方
+
+`package.json` の `version` を上げてコミットし、同じ番号のタグを push します。GitHub Actions が Windows 版と Linux 版をビルドして Releases に載せます（`.github/workflows/release.yml`）。
+
+```powershell
+git tag v2.0.1
+git push origin v2.0.1
+```
+
+手元でビルドする場合は `npm run dist:win`（Windows 上）/ `npm run dist:linux`（Linux 上）。出力先は `dist/` です。
 
 ## 操作
 
 | 操作 | 内容 |
 |---|---|
-| 上部バーをドラッグ | 移動 |
-| 上部バーをダブルクリック / F6 | 右上へ移動 |
+| 上部バーをドラッグ | 移動（Windows のスナップ対応: 画面端へドラッグ / Win+矢印キー / 最大化ボタンにマウスを乗せてレイアウト選択） |
+| 上部バー以外をドラッグ（地図・ボタン以外） | 移動のみ（スナップなし） |
+| 上部バーをダブルクリック | 最大化 / 元に戻す |
+| F6 | 右上へ移動 |
 | ウィンドウの端をドラッグ | サイズ変更（表示は自動で拡大・縮小） |
 | 上部のタブ / → キー | ページ切替（マウスが乗っている間は自動切替を止めます。設定で変更可） |
 | 上部の「⚙ 設定」 / トレイの「設定...」 | 設定ウィンドウ。ページごとの表示時間、自動切替に含めるページ、マウスが乗っているときに止めるかを設定 |
-| 上部の間隔メニュー | 全ページ共通の間隔（5秒〜2分、切替なし）。「ページごと」は設定ウィンドウの秒数を使います |
-| Ctrl+Alt+T | クリック透過の切替（どこからでも使えます） |
+| Ctrl+Alt+T（Linux は Ctrl+Alt+Shift+T） | クリック透過の切替（どこからでも使えます） |
 | Esc | 地震表示を閉じて通常表示に戻る |
 | タスクトレイのアイコン | 手前表示・不透明度・音・テスト表示・終了 |
 
@@ -54,7 +80,7 @@ npm run shortcut          # デスクトップにショートカットを作成
 
 ## 現在地の警報・注意報
 
-- Windows の位置情報サービスで現在地を取得します。取得できないときは `.env` の `CLOCK_LAT` / `CLOCK_LON` を使います。
+- Windows の位置情報サービスで現在地を取得します。取得できないとき（Linux では常に）は `.env` の `CLOCK_LAT` / `CLOCK_LON` を使います。
 - 国土地理院の逆ジオコーダで市区町村を特定し、気象庁の警報・注意報を 5 分ごとに取得します。
 - 発表中の警報・注意報は、上部バー（地震表示中も表示）と天気ページに気象庁の配色で表示します。
 - 現在地は天気、自宅マーカー、揺れの到達予測にも使います。
@@ -62,6 +88,11 @@ npm run shortcut          # デスクトップにショートカットを作成
 > 本アプリの表示は参考情報です。到達時刻や円は簡易モデルによる推定です。
 
 ## 設定 (.env)
+
+設定ファイル `.env` は次の場所に置きます（ソースから起動するときは、プロジェクトのフォルダに置いたものも読みます）。
+
+- Windows: `%APPDATA%\topmost-clock\.env`
+- Linux: `~/.config/topmost-clock/.env`
 
 | キー | 既定値 | 内容 |
 |---|---|---|
@@ -74,7 +105,7 @@ npm run shortcut          # デスクトップにショートカットを作成
 | `CLOCK_QUAKE_HOLD_SECONDS` | 60 | 地震情報を表示し続ける秒数 |
 | `CLOCK_EEW_TRAINING` | 0 | 1 にすると訓練報も表示 |
 
-ウィンドウの位置・不透明度・音の設定は `%APPDATA%\topmost-clock\settings.json` に保存されます。
+ウィンドウの位置・不透明度・音の設定は同じフォルダの `settings.json` に保存されます。
 
 ## 旧バージョン
 

@@ -6,12 +6,90 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1"
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1",
+    "icon": "node scripts/make-icon.js",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:linux": "electron-builder --linux --publish never"
   },
   "dependencies": {
     "leaflet": "1.9.4"
   },
   "devDependencies": {
-    "electron": "45.4.1"
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
+  },
+  "homepage": "https://github.com/otsukisama06/clock_eew_app",
+  "author": {
+    "name": "otsukisama06",
+    "email": "otsukisama06@users.noreply.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/otsukisama06/clock_eew_app.git"
+  },
+  "build": {
+    "appId": "tugu.clock.topmost",
+    "productName": "Topmost Clock",
+    "artifactName": "TopmostClock-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "otsukisama06",
+        "repo": "clock_eew_app",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Topmost Clock",
+      "artifactName": "TopmostClock-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "executableName": "topmost-clock",
+      "maintainer": "otsukisama06 <otsukisama06@users.noreply.github.com>",
+      "synopsis": "常に手前に表示する時計・天気・雨雲レーダー・緊急地震速報",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "topmost-clock"
+        }
+      }
+    }
   }
 }

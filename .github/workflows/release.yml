@@ -1,0 +1,62 @@
+# v から始まるタグ (例: v2.0.0) を push すると、Windows / Linux 版をビルドして GitHub Releases に載せる
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'リリースするタグ (例: v2.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Topmost Clock $TAG" --notes-file - <<'NOTES'
+          ## ダウンロード
+
+          | OS | ファイル | 使い方 |
+          |---|---|---|
+          | Windows | `TopmostClock-Setup-*.exe` | 実行してインストール。デスクトップとスタートメニューにショートカットが作られます |
+          | Linux (Ubuntu / Debian) | `TopmostClock-*-linux-amd64.deb` | `sudo apt install ./TopmostClock-*.deb`。アプリ一覧に登録され、初回起動時にデスクトップへショートカットを作ります |
+          | Linux (その他) | `TopmostClock-*-linux-x86_64.AppImage` | `chmod +x` して実行。初回起動時にデスクトップとアプリ一覧へショートカットを作ります |
+
+          Windows ではコード署名をしていないため、SmartScreen の警告が出ることがあります（「詳細情報」→「実行」）。
+          NOTES
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then npx electron-builder --win --publish always; \
+          else npx electron-builder --linux --publish always; fi
