@@ -682,13 +682,18 @@ let updateInstallPending = false;
 function updaterLog(...a) {
   try { fs.appendFileSync(path.join(app.getPath('userData'), 'updater.log'), `${new Date().toISOString()} ${a.join(' ')}\n`); } catch { }
 }
+function linuxPackageType() {
+  try { return fs.readFileSync(path.join(process.resourcesPath, 'package-type'), 'utf8').trim(); } catch { return null; }
+}
+const isDebInstall = () => process.platform === 'linux' && !process.env.APPIMAGE && linuxPackageType() === 'deb';
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
-  // Linux は AppImage 版だけ (deb 版は apt で更新する)
-  if (process.platform === 'linux' && !process.env.APPIMAGE) return;
+  // Linux は AppImage 版と deb 版 (deb はインストーラーが置く resources/package-type で見分ける)
+  if (process.platform === 'linux' && !process.env.APPIMAGE && linuxPackageType() !== 'deb') return;
   try { ({ autoUpdater: updater } = require('electron-updater')); } catch (e) { updaterLog('load failed', e.message); return; }
   updater.autoDownload = true;
-  updater.autoInstallOnAppQuit = true;
+  // deb 版は更新に管理者パスワードの入力が要るので、終了時に勝手に始めず、通知やトレイから更新したときだけ入れる
+  updater.autoInstallOnAppQuit = !isDebInstall();
   updater.disableWebInstaller = true;
   updater.logger = { info: (m) => updaterLog('info', m), warn: (m) => updaterLog('warn', m), error: (m) => updaterLog('error', m), debug: () => { } };
   updater.on('checking-for-update', () => { updateState.status = 'checking'; rebuildTrayMenu(); });
@@ -705,11 +710,14 @@ function setupAutoUpdate() {
   updater.on('update-downloaded', (info) => {
     updateState = { ...updateState, status: 'ready', version: info.version, manual: false };
     rebuildTrayMenu();
+    // 開発用: CLOCK_DEBUG_INSTALL_UPDATE=1 ならすぐに更新する (更新の流れを通しで確かめるとき)
+    if (process.env.CLOCK_DEBUG_INSTALL_UPDATE === '1') return installUpdate();
     const { Notification } = require('electron');
     if (Notification.isSupported()) {
       const n = new Notification({
         title: `Topmost Clock v${info.version} の準備ができました`,
-        body: 'クリックすると再起動して更新します。このままでも次に終了したときに更新されます。',
+        body: isDebInstall() ? 'クリックすると再起動して更新します (管理者パスワードの入力が必要です)。'
+          : 'クリックすると再起動して更新します。このままでも次に終了したときに更新されます。',
         icon: makeIcon(64), silent: true,
       });
       liveNotifications.add(n);
@@ -733,7 +741,7 @@ function updateDialog(type, message) {
   dialog.showMessageBox({ type, title: 'Topmost Clock', message });
 }
 function checkForUpdatesManually() {
-  if (!updater) return updateDialog('info', 'この版は自動アップデートに対応していません (ソースから起動している、または deb 版)。');
+  if (!updater) return updateDialog('info', 'この版は自動アップデートに対応していません (ソースから起動しています)。');
   if (updateState.status === 'ready') return installUpdate();
   if (updateState.status === 'downloading') return updateDialog('info', `v${updateState.version} をダウンロードしています (${updateState.percent}%)。`);
   updateState.manual = true;
