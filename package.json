@@ -1,6 +1,6 @@
 {
   "name": "topmost-clock",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "常に手前に表示する時計 + 天気 + 雨雲レーダー + 緊急地震速報",
   "main": "src/main.js",
   "private": true,
@@ -12,6 +12,7 @@
     "dist:linux": "electron-builder --linux --publish never"
   },
   "dependencies": {
+    "electron-updater": "6.8.11",
     "leaflet": "1.9.4"
   },
   "devDependencies": {

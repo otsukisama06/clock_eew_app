@@ -15,6 +15,7 @@ Electron（HTML/CSS/JavaScript）で作っています。Windows と Linux で�
 | Linux (Ubuntu / Debian) | `TopmostClock-*-linux-amd64.deb` | `sudo apt install ./TopmostClock-*.deb`。アプリ一覧に登録され、初回起動時にデスクトップへショートカットを作ります |
 | Linux (その他) | `TopmostClock-*-linux-x86_64.AppImage` | `chmod +x` して実行。初回起動時にデスクトップとアプリ一覧へショートカットを作ります |
 
+- **自動アップデート**: Windows 版と AppImage 版は、起動 30 秒後と 6 時間ごとに新しい版を確認し、裏でダウンロードします。準備ができたら通知が出るので、クリックすると再起動して更新します（そのままでも次に終了したときに更新されます）。地震の表示中は再起動しません。トレイメニューの「アップデートを確認」からも確認できます。deb 版は `sudo apt install ./新しい.deb` で更新してください。記録は設定フォルダの `updater.log` に残ります。
 - ショートカットを消してしまったときは、タスクトレイのメニュー「デスクトップにショートカットを作成」で作り直せます。
 - Windows ではコード署名をしていないため、SmartScreen の警告が出ることがあります（「詳細情報」→「実行」）。
 - Linux でタスクトレイのアイコンを出すには、デスクトップ環境が AppIndicator に対応している必要があります（GNOME は拡張機能「AppIndicator Support」が必要）。

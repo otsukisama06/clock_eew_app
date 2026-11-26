@@ -357,6 +357,7 @@ function rebuildTrayMenu() {
     { label: 'テスト: 地震情報', click: () => win && win.webContents.send('test-eew', 'info') },
     { type: 'separator' },
     { label: 'デスクトップにショートカットを作成', click: createDesktopShortcutWithNotice },
+    ...updateMenuItems(),
     { label: '終了', click: () => app.quit() },
   ]));
 }
@@ -558,7 +559,9 @@ ipcMain.on('drag-end', () => {
 ipcMain.on('minimize', () => win && win.minimize());
 ipcMain.on('quit', () => app.quit());
 // 地震情報受信時: 最小化/非表示でも前面に出す
+let quakeAlerting = false; // 地震の表示中 (この間はアップデートのための再起動をしない)
 ipcMain.on('quake-alert', () => {
+  quakeAlerting = true;
   if (!win) return;
   if (win.isMinimized()) win.restore();
   if (!win.isVisible()) win.showInactive();
@@ -600,6 +603,93 @@ function showQuakeNotification({ title, body, level } = {}) {
 }
 ipcMain.on('notify', (_e, n) => showQuakeNotification(n));
 
+// ---------- 自動アップデート (GitHub Releases) ----------
+// インストール版だけ。起動 30 秒後と 6 時間ごとに確認し、新しい版があれば裏でダウンロードする。
+// ダウンロードが終わったら通知とトレイメニューで知らせ、次に終了したときにも自動で入れ替わる。
+// 地震の表示中は再起動しない (表示が終わってから更新する)。
+let updater = null;
+let updateState = { status: 'idle', version: null, percent: 0, error: null, manual: false };
+let updateInstallPending = false;
+function updaterLog(...a) {
+  try { fs.appendFileSync(path.join(app.getPath('userData'), 'updater.log'), `${new Date().toISOString()} ${a.join(' ')}\n`); } catch { }
+}
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  // Linux は AppImage 版だけ (deb 版は apt で更新する)
+  if (process.platform === 'linux' && !process.env.APPIMAGE) return;
+  try { ({ autoUpdater: updater } = require('electron-updater')); } catch (e) { updaterLog('load failed', e.message); return; }
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.disableWebInstaller = true;
+  updater.logger = { info: (m) => updaterLog('info', m), warn: (m) => updaterLog('warn', m), error: (m) => updaterLog('error', m), debug: () => { } };
+  updater.on('checking-for-update', () => { updateState.status = 'checking'; rebuildTrayMenu(); });
+  updater.on('update-not-available', () => {
+    const manual = updateState.manual;
+    updateState = { ...updateState, status: 'latest', manual: false }; rebuildTrayMenu();
+    if (manual) updateDialog('info', `最新の版を使っています (v${app.getVersion()})。`);
+  });
+  updater.on('update-available', (info) => { updateState = { ...updateState, status: 'downloading', version: info.version, percent: 0 }; rebuildTrayMenu(); });
+  updater.on('download-progress', (p) => {
+    const pct = Math.floor(p.percent || 0);
+    if (pct >= updateState.percent + 10) { updateState.percent = pct; rebuildTrayMenu(); }
+  });
+  updater.on('update-downloaded', (info) => {
+    updateState = { ...updateState, status: 'ready', version: info.version, manual: false };
+    rebuildTrayMenu();
+    const { Notification } = require('electron');
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: `Topmost Clock v${info.version} の準備ができました`,
+        body: 'クリックすると再起動して更新します。このままでも次に終了したときに更新されます。',
+        icon: makeIcon(64), silent: true,
+      });
+      liveNotifications.add(n);
+      n.on('click', () => { liveNotifications.delete(n); installUpdate(); });
+      n.on('close', () => liveNotifications.delete(n));
+      n.show();
+    }
+  });
+  updater.on('error', (err) => {
+    const manual = updateState.manual;
+    updateState = { ...updateState, status: 'error', error: err ? err.message : String(err), manual: false };
+    updaterLog('error', updateState.error); rebuildTrayMenu();
+    if (manual) updateDialog('error', `アップデートを確認できませんでした。\n${updateState.error}`);
+  });
+  const check = () => { if (updateState.status !== 'ready' && updateState.status !== 'downloading') updater.checkForUpdates().catch(() => { }); };
+  setTimeout(check, 30 * 1000);
+  setInterval(check, 6 * 60 * 60 * 1000);
+}
+function updateDialog(type, message) {
+  const { dialog } = require('electron');
+  dialog.showMessageBox({ type, title: 'Topmost Clock', message });
+}
+function checkForUpdatesManually() {
+  if (!updater) return updateDialog('info', 'この版は自動アップデートに対応していません (ソースから起動している、または deb 版)。');
+  if (updateState.status === 'ready') return installUpdate();
+  if (updateState.status === 'downloading') return updateDialog('info', `v${updateState.version} をダウンロードしています (${updateState.percent}%)。`);
+  updateState.manual = true;
+  updater.checkForUpdates().catch(() => { });
+}
+function installUpdate() {
+  if (!updater || updateState.status !== 'ready') return;
+  if (quakeAlerting) {
+    // 地震の表示が終わったら更新する
+    updateInstallPending = true;
+    return;
+  }
+  updateInstallPending = false;
+  updaterLog('install', updateState.version);
+  setImmediate(() => updater.quitAndInstall(true, true));
+}
+function updateMenuItems() {
+  const s = updateState;
+  const label = s.status === 'ready' ? `再起動して v${s.version} に更新`
+    : s.status === 'downloading' ? `v${s.version} をダウンロード中 (${s.percent}%)`
+      : s.status === 'checking' ? 'アップデートを確認中...'
+        : `アップデートを確認 (現在 v${app.getVersion()})`;
+  return [{ label, enabled: s.status !== 'checking', click: checkForUpdatesManually }];
+}
+
 // Windows の通知は、同じ AppUserModelID を持つスタートメニューのショートカットが無いと出ない。
 // インストール版はインストーラーが作るので、ソースから起動したときだけここで作る
 function ensureDevStartMenuShortcut() {
@@ -614,6 +704,8 @@ function ensureDevStartMenuShortcut() {
 }
 
 ipcMain.on('quake-alert-end', () => {
+  quakeAlerting = false;
+  if (updateInstallPending) setTimeout(installUpdate, 3000);
   if (!win) return;
   win.flashFrame(false);
   win.setAlwaysOnTop(settings.topmost, 'floating');
@@ -624,6 +716,7 @@ app.on('second-instance', showWindow);
 app.whenReady().then(() => {
   loadSettings();
   try { ensureDevStartMenuShortcut(); } catch (e) { console.error('start menu shortcut', e); }
+  setupAutoUpdate();
   createWindow();
   tray = new Tray(makeIcon(32));
   tray.setToolTip('Topmost Clock');
