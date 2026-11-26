@@ -83,8 +83,8 @@ function buildConfig() {
     quakeMinScale: num(env.CLOCK_QUAKE_MIN_SCALE, 10),
     quakeHoldSeconds: Math.max(10, num(env.CLOCK_QUAKE_HOLD_SECONDS, 60)),
     eewShowTraining: env.CLOCK_EEW_TRAINING === '1',
-    // 画面切替のアニメーション: full = フェード・スライド, light = 一瞬で切替。
-    // Linux は GPU を使わない描画だとフェード (地図の色反転フィルタの再計算) がとても重いので light を既定にする
+    // 画面切替のアニメーション: full = フェード + スライド・順番に出る演出, light = フェードだけ。
+    // Linux は GPU を使わない描画だと動きの多い演出が重いので light を既定にする
     animation: ['full', 'light'].includes(env.CLOCK_ANIMATION) ? env.CLOCK_ANIMATION : (process.platform === 'linux' ? 'light' : 'full'),
   };
 }
@@ -559,7 +559,7 @@ function syncTimeWithNotice() {
   }));
 }
 
-ipcMain.handle('get-config', () => ({ ...buildConfig(), state: { ...settings, ...effectivePageSettings() } }));
+ipcMain.handle('get-config', () => ({ ...buildConfig(), version: app.getVersion(), state: { ...settings, ...effectivePageSettings() } }));
 ipcMain.on('open-settings', () => openSettings());
 ipcMain.on('set-page-settings', (_e, v) => {
   const sec = {}, en = {};
@@ -788,7 +788,7 @@ app.whenReady().then(() => {
   setupAutoUpdate();
   createWindow();
   tray = new Tray(makeIcon(32));
-  tray.setToolTip('Topmost Clock');
+  tray.setToolTip(`Topmost Clock v${app.getVersion()}`);
   tray.on('click', showWindow);
   syncTime();
   setInterval(syncTime, 30 * 60 * 1000);

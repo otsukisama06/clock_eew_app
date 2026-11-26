@@ -115,7 +115,7 @@ git push origin v2.0.1
 | `CLOCK_QUAKE_MIN_SCALE` | 10 | 地震情報で画面を切り替える最小震度（10=震度1, 30=震度3, 40=震度4, 45=5弱） |
 | `CLOCK_QUAKE_HOLD_SECONDS` | 60 | 地震情報を表示し続ける秒数 |
 | `CLOCK_EEW_TRAINING` | 0 | 1 にすると訓練報も表示 |
-| `CLOCK_ANIMATION` | Windows: full / Linux: light | 画面切替のアニメーション。full = フェードとスライド、light = 一瞬で切替（軽い） |
+| `CLOCK_ANIMATION` | Windows: full / Linux: light | 画面切替のアニメーション。どちらもクロスフェードします。full = フェード + スライドと項目が順番に出る演出、light = フェードだけ（軽い） |
 
 ウィンドウの位置・不透明度・音の設定は同じフォルダの `settings.json` に保存されます。
 

@@ -72,8 +72,38 @@ function stagger(root, base = 0) {
 const fmtDateTime = (d) => d ? `${d.getMonth() + 1}/${d.getDate()} ${fmtTime(d)}` : '--';
 
 // 暗い地図 (国土地理院 淡色地図を反転)
+// 色の反転は CSS の filter だと画面を描き直すたび (フェード中は毎フレーム) に計算し直すので重い。
+// 地図画像を読み込んだときに 1 回だけ canvas に反転して描き、あとはその画像をそのまま使う。
+const BASEMAP_FILTER = 'invert(1) hue-rotate(180deg) brightness(0.75) contrast(0.9) saturate(0.4)';
+const DarkTileLayer = L.TileLayer.extend({
+  createTile(coords, done) {
+    const tile = document.createElement('canvas');
+    const size = this.getTileSize(), r = Math.min(2, window.devicePixelRatio || 1);
+    tile.width = size.x * r; tile.height = size.y * r;
+    tile.complete = false;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      const ctx = tile.getContext('2d');
+      ctx.filter = BASEMAP_FILTER;
+      ctx.drawImage(img, 0, 0, tile.width, tile.height);
+      tile.complete = true;
+      done(null, tile);
+    };
+    img.onerror = (e) => { tile.complete = true; done(e, tile); };
+    tile._img = img;
+    img.src = this.getTileUrl(coords);
+    return tile;
+  },
+  // 不要になったタイルは読み込みを止め、canvas のメモリを返す
+  _removeTile(key) {
+    const t = this._tiles[key];
+    if (t && t.el._img) { t.el._img.onload = t.el._img.onerror = null; t.el._img.src = ''; t.el.width = t.el.height = 0; }
+    return L.GridLayer.prototype._removeTile.call(this, key);
+  },
+});
 function makeBaseLayer() {
-  return L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+  return new DarkTileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
     maxZoom: 13, maxNativeZoom: 18, minZoom: 4, className: 'basemap',
     attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
   });

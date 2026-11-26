@@ -86,5 +86,5 @@ function flash() {
 }
 
 build();
-window.clock.getConfig().then((c) => render(c.state));
+window.clock.getConfig().then((c) => { document.getElementById('ver').textContent = `Topmost Clock v${c.version}`; render(c.state); });
 window.clock.onState(render);

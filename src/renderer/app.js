@@ -20,6 +20,7 @@ const App = {
   async init() {
     this.cfg = await window.clock.getConfig();
     document.body.classList.toggle('anim-light', this.cfg.animation === 'light');
+    $('#app-version').textContent = `Topmost Clock v${this.cfg.version}`;
     this.applyState(this.cfg.state);
     window.clock.onState((s) => this.applyState(s));
     this.fitRootFont();
@@ -126,7 +127,7 @@ const App = {
     if (prev) {
       const prevName = this.current;
       prev.classList.remove('active'); prev.classList.add('leaving');
-      setTimeout(() => { prev.classList.remove('leaving'); if (this.current !== prevName) hook(prevName, 'hide'); }, 350);
+      setTimeout(() => { prev.classList.remove('leaving'); if (this.current !== prevName) hook(prevName, 'hide'); }, 650);
     }
     next.classList.add('active');
     stagger(next);
